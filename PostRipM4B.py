@@ -935,6 +935,7 @@ class AudioBookConverter:
         cmd = [
             self.ffmpeg, "-v", self._get_ffmpeg_verbosity(), "-nostdin",
             "-i", mp3_path,
+            "-map", "0:a",  #Map only audio stream
             "-c:a", "aac",  # Always use AAC for M4B
             "-b:a", bitrate,
             "-f", "ipod",  # M4B format
@@ -1607,7 +1608,7 @@ Examples:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.0.9"
+        version="%(prog)s 1.0.10"
     )
 
     # Parse arguments

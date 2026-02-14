@@ -43,6 +43,13 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
+# Optional imports for audio metadata
+try:
+    from mutagen.mp4 import MP4, MP4Cover
+except ImportError:
+    MP4 = None
+    MP4Cover = None
+
 # -----------------------------
 # Platform-specific imports
 # -----------------------------
@@ -615,6 +622,8 @@ class AudioBookConverter:
                 self.temp_files.append(intermediate_file)
             else:
                 os.rename(intermediate_file, self.output_file)
+
+            self._set_itunes_sort_name(self.output_file, metadata.title)
 
             # Cleanup - NEW: Clean up temp chapter directory
             if not self.config.keep_temp:
@@ -1313,6 +1322,23 @@ class AudioBookConverter:
             stats['audio_duration'] = accumulated_durations[-1]
 
         self.progress.summary(stats)
+
+    def _set_itunes_sort_name(self, output_file: str, sort_name: Optional[str]):
+        """Set iTunes Sort Name atom using mutagen"""
+        if not sort_name:
+            return
+        if MP4 is None:
+            self.progress.warning("mutagen not installed; skipping iTunes Sort Name tag")
+            return
+        self.progress.step_start("Writing iTunes Sort Name")
+        try:
+            mp4 = MP4(output_file)
+            mp4["sonm"] = [sort_name]
+            mp4.save()
+            self.progress.step_end(True)
+        except Exception as e:
+            self.progress.step_end(False)
+            self.progress.warning(f"Failed to write iTunes Sort Name tag: {e}")
 
 # -----------------------------
 # GUI Launcher

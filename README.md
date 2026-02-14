@@ -11,6 +11,7 @@ PostRipM4B is a comprehensive audiobook converter designed specifically for proc
 - **Metadata Preservation**: Maintains author, title, narrator, and other book information
 - **Chapter Editor**: Built-in GUI editor for fine-tuning chapter timings and titles
 - **Cross-Platform**: Works on Windows, macOS, and Linux
+- **iTunes Sort Name**: Writes the Sort Name tag for M4B files
 
 ## Workflow
 
@@ -25,6 +26,7 @@ PostRipM4B is a comprehensive audiobook converter designed specifically for proc
 ### Prerequisites
 - Python 3.8 or higher
 - FFmpeg installed and in your system PATH
+- mutagen (for writing iTunes Sort Name)
 
 ### Installation
 

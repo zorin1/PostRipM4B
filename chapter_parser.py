@@ -318,6 +318,10 @@ def parse_libby_chapters(file_path: str) -> Metadata:
     for c in data.get("creator", []):
         role = c.get("role", "").lower()
         name = c.get("name", "").strip()
+        if role in ("author", "aut"):
+            role = "author"
+        elif role in ("narrator", "nrt"):
+            role = "narrator"
         if role and name:
             contributors[role] = name
 
@@ -674,8 +678,14 @@ def export_ffmetadata(metadata: Metadata, output_path: str):
 
     if metadata.title:
         lines.append(f"title={metadata.title}")
+        lines.append(f"album={metadata.title}")
+        lines.append(f"sort_name={metadata.title}")
+        lines.append(f"sortname={metadata.title}")
+        lines.append(f"sonm={metadata.title}")
     if metadata.author:
         lines.append(f"artist={metadata.author}")
+    lines.append("track=1")
+    lines.append("media_type=2")
     if metadata.year:
         lines.append(f"date={metadata.year}")
     if metadata.genre:

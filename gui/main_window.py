@@ -248,6 +248,7 @@ class ConverterMainWindow(QMainWindow):
         self.source_edit.setPlaceholderText("Select directory containing MP3 files")
         self.source_browse_btn = QPushButton("Browse...")
         self.source_browse_btn.clicked.connect(self.browse_source)
+        self.source_edit.editingFinished.connect(self.on_source_edit_finished)
 
         source_layout.addWidget(self.source_label, 0, 0)
         source_layout.addWidget(self.source_edit, 0, 1)
@@ -414,26 +415,48 @@ class ConverterMainWindow(QMainWindow):
 
         meta_layout.addWidget(QLabel("Title:"), 0, 0)
         self.title_edit = QLineEdit()
-        meta_layout.addWidget(self.title_edit, 0, 1, 1, 2)
+        self.title_edit.setMinimumWidth(280)
+        meta_layout.addWidget(self.title_edit, 0, 1)
+
+        meta_layout.addWidget(QLabel("Album:"), 0, 2)
+        self.album_edit = QLineEdit()
+        meta_layout.addWidget(self.album_edit, 0, 3)
 
         meta_layout.addWidget(QLabel("Author:"), 1, 0)
         self.author_edit = QLineEdit()
-        meta_layout.addWidget(self.author_edit, 1, 1, 1, 2)
+        self.author_edit.setMinimumWidth(280)
+        meta_layout.addWidget(self.author_edit, 1, 1)
 
-        meta_layout.addWidget(QLabel("Year:"), 2, 0)
+        meta_layout.addWidget(QLabel("Year:"), 1, 2)
         self.year_spin = QSpinBox()
         self.year_spin.setRange(1000, 2100)
         self.year_spin.setValue(2024)
-        meta_layout.addWidget(self.year_spin, 2, 1)
+        meta_layout.addWidget(self.year_spin, 1, 3)
 
-        meta_layout.addWidget(QLabel("Genre:"), 2, 2)
+        meta_layout.addWidget(QLabel("Genre:"), 2, 0)
         self.genre_edit = QLineEdit("Audiobook")
-        meta_layout.addWidget(self.genre_edit, 2, 3)
+        meta_layout.addWidget(self.genre_edit, 2, 1)
 
-        meta_layout.addWidget(QLabel("Comment:"), 3, 0)
+        meta_layout.addWidget(QLabel("Comment:"), 2, 2)
         self.comment_edit = QLineEdit()
         self.comment_edit.setPlaceholderText("Optional comment or description")
-        meta_layout.addWidget(self.comment_edit, 3, 1, 1, 3)
+        meta_layout.addWidget(self.comment_edit, 2, 3)
+
+        meta_layout.addWidget(QLabel("Track Number:"), 3, 0)
+        self.track_spin = QSpinBox()
+        self.track_spin.setRange(1, 9999)
+        self.track_spin.setValue(1)
+        meta_layout.addWidget(self.track_spin, 3, 1)
+
+        meta_layout.addWidget(QLabel("Sort Name:"), 3, 2)
+        self.sort_name_edit = QLineEdit()
+        meta_layout.addWidget(self.sort_name_edit, 3, 3)
+
+        meta_layout.addWidget(QLabel("Media Type:"), 4, 0)
+        self.media_type_spin = QSpinBox()
+        self.media_type_spin.setRange(0, 255)
+        self.media_type_spin.setValue(2)
+        meta_layout.addWidget(self.media_type_spin, 4, 1)
 
         meta_group.setLayout(meta_layout)
 
@@ -747,6 +770,7 @@ class ConverterMainWindow(QMainWindow):
             if not self.dest_edit.text():
                 output_dir = Path(directory) / 'm4b'
                 self.dest_edit.setText(str(output_dir))
+            self.auto_load_metadata_from_source(directory)
 
     def browse_destination(self):
         """Browse for destination directory"""
@@ -845,6 +869,43 @@ class ConverterMainWindow(QMainWindow):
     def on_chapter_format_changed(self, text):
         """Handle chapter format selection change"""
         pass
+
+    def on_source_edit_finished(self):
+        source_dir = self.source_edit.text()
+        if source_dir:
+            self.auto_load_metadata_from_source(source_dir)
+
+    def auto_load_metadata_from_source(self, source_dir):
+        metadata_path = Path(source_dir) / "metadata" / "metadata.json"
+        if not metadata_path.exists():
+            return
+        try:
+            self.chapter_file_edit.setText(str(metadata_path))
+            self.chapter_format_combo.setCurrentText("Libby (metadata.json)")
+            self.current_metadata = chapter_parser.load_chapters(str(metadata_path), format='libby')
+            self.populate_metadata_fields(self.current_metadata)
+            self.chapters_status_label.setText("Metadata loaded from metadata.json")
+            self.analyze_mp3_duration()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load metadata.json: {str(e)}")
+
+    def populate_metadata_fields(self, metadata):
+        self.title_edit.setText(metadata.title or "")
+        self.author_edit.setText(metadata.author or "")
+        album_value = metadata.album or metadata.title or ""
+        self.album_edit.setText(album_value)
+        if metadata.year:
+            self.year_spin.setValue(metadata.year)
+        if metadata.genre:
+            self.genre_edit.setText(metadata.genre)
+        if metadata.comment:
+            self.comment_edit.setText(metadata.comment)
+        if metadata.track_number:
+            self.track_spin.setValue(metadata.track_number)
+        if metadata.sort_name:
+            self.sort_name_edit.setText(metadata.sort_name)
+        if metadata.media_type is not None:
+            self.media_type_spin.setValue(metadata.media_type)
 
     def scan_batch_directories(self):
         """Scan for subdirectories with MP3 files"""
@@ -1003,6 +1064,15 @@ class ConverterMainWindow(QMainWindow):
         self.chapters_info_label.setText(info_text)
         self.chapters_info_label.setVisible(True)
 
+    def on_chapters_updated(self, updated_metadata):
+        """Handle updated metadata from chapter editor"""
+        self.current_metadata = updated_metadata
+        self.update_chapter_display()
+        self.populate_metadata_fields(updated_metadata)
+
+        QMessageBox.information(self, "Chapters Updated",
+                              f"Updated {len(updated_metadata.chapters)} chapters.")
+
     def edit_chapters(self):
         """Open the chapter editor dialog"""
         if not self.current_metadata:
@@ -1027,24 +1097,6 @@ class ConverterMainWindow(QMainWindow):
         if editor.exec_() == QDialog.Accepted:
             # The signal handler will update everything
             pass
-
-    def on_chapters_updated(self, updated_metadata):
-        """Handle updated metadata from chapter editor"""
-        self.current_metadata = updated_metadata
-        self.update_chapter_display()
-
-        # Update metadata fields
-        self.title_edit.setText(updated_metadata.title or "")
-        self.author_edit.setText(updated_metadata.author or "")
-        if updated_metadata.year:
-            self.year_spin.setValue(updated_metadata.year)
-        if updated_metadata.genre:
-            self.genre_edit.setText(updated_metadata.genre)
-        if updated_metadata.comment:
-            self.comment_edit.setText(updated_metadata.comment)
-
-        QMessageBox.information(self, "Chapters Updated",
-                              f"Updated {len(updated_metadata.chapters)} chapters.")
 
     def apply_cli_args_or_defaults(self):
         """Apply CLI arguments if provided, otherwise set defaults"""
@@ -1102,6 +1154,7 @@ class ConverterMainWindow(QMainWindow):
             if hasattr(self.cli_args, 'input_dir') and self.cli_args.input_dir:
                 source_dir = str(Path(self.cli_args.input_dir).absolute())
                 self.source_edit.setText(source_dir)
+                self.auto_load_metadata_from_source(source_dir)
                 # Auto-update output directory based on new source
                 if not hasattr(self.cli_args, 'output_dir') or not self.cli_args.output_dir:
                     output_dir = str(Path(source_dir) / 'm4b')
@@ -1280,6 +1333,17 @@ class ConverterMainWindow(QMainWindow):
 
         # Input/Output
         config.input_dir = self.source_edit.text()
+
+        # Metadata
+        config.title = self.title_edit.text().strip() or None
+        config.author = self.author_edit.text().strip() or None
+        config.year = self.year_spin.value() or None
+        config.genre = self.genre_edit.text().strip() or None
+        config.comment = self.comment_edit.text().strip() or None
+        config.track_number = self.track_spin.value()
+        config.sort_name = self.sort_name_edit.text().strip() or None
+        config.media_type = self.media_type_spin.value()
+        config.album = self.album_edit.text().strip() or None
         config.output_dir = self.dest_edit.text()
         config.output_name = self.filename_edit.text() or None
         config.overwrite = self.overwrite_check.isChecked()
@@ -1291,6 +1355,16 @@ class ConverterMainWindow(QMainWindow):
         sample_rate_text = self.sample_rate_combo.currentText()
         if sample_rate_text != "Source":
             config.sample_rate = int(sample_rate_text)
+
+        # Track Number, Sort Name, and Media Type metadata
+        if self.current_metadata:
+            self.current_metadata.track_number = self.track_spin.value()
+            self.current_metadata.sort_name = self.sort_name_edit.text().strip() or None
+            self.current_metadata.media_type = self.media_type_spin.value()
+
+        config.track_number = self.track_spin.value()
+        config.sort_name = self.sort_name_edit.text().strip() or None
+        config.media_type = self.media_type_spin.value()
 
         channels_text = self.channels_combo.currentText()
         if channels_text == "1 (Mono)":

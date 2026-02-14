@@ -58,6 +58,10 @@ class Metadata:
     year: Optional[int] = None
     genre: Optional[str] = None
     comment: Optional[str] = None
+    track_number: Optional[int] = 1
+    sort_name: Optional[str] = None
+    media_type: Optional[int] = 2
+    album: Optional[str] = None
 
     def __post_init__(self):
         """Ensure chapters are sorted by time"""
@@ -73,7 +77,11 @@ class Metadata:
             'chapters': [chapter.to_dict() for chapter in self.chapters],
             'year': self.year,
             'genre': self.genre,
-            'comment': self.comment
+            'comment': self.comment,
+            'track_number': self.track_number,
+            'sort_name': self.sort_name,
+            'media_type': self.media_type,
+            'album': self.album
         }
 
     @classmethod
@@ -87,7 +95,10 @@ class Metadata:
             chapters=[Chapter.from_dict(ch) for ch in data['chapters']],
             year=data.get('year'),
             genre=data.get('genre'),
-            comment=data.get('comment')
+            comment=data.get('comment'),
+            track_number=data.get('track_number', 1),
+            sort_name=data.get('sort_name'),
+            media_type=data.get('media_type', 2)
         )
 
     def copy(self) -> 'Metadata':
@@ -336,7 +347,11 @@ def parse_libby_chapters(file_path: str) -> Metadata:
         chapters=chapters,
         year=data.get("year"),
         genre=data.get("genre"),
-        comment=data.get("comment")
+        comment=data.get("comment"),
+        track_number=1,
+        sort_name=data.get("title", "").strip() or None,
+        media_type=2,
+        album=(data.get("album") or data.get("title", "").strip() or None)
     )
 
 def parse_ffmetadata_chapters(file_path: str) -> Metadata:
@@ -360,7 +375,14 @@ def parse_ffmetadata_chapters(file_path: str) -> Metadata:
         'title': '',
         'author': None,
         'narrator': None,
-        'total_duration': timedelta(seconds=0)
+        'total_duration': timedelta(seconds=0),
+        'year': None,
+        'genre': None,
+        'comment': None,
+        'track_number': 1,
+        'sort_name': None,
+        'media_type': 2,
+        'album': None
     }
 
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -383,11 +405,31 @@ def parse_ffmetadata_chapters(file_path: str) -> Metadata:
 
             if key == 'title':
                 metadata['title'] = value
+            elif key == 'album':
+                metadata['album'] = value
             elif key == 'artist':
                 metadata['author'] = value
             elif key == 'comment' and 'narrator' in value.lower():
                 # Try to extract narrator from comment
                 metadata['narrator'] = value
+            elif key == 'date':
+                metadata['year'] = value
+            elif key == 'genre':
+                metadata['genre'] = value
+            elif key == 'comment':
+                metadata['comment'] = value
+            elif key in ('sort_name', 'sortname', 'sonm'):
+                metadata['sort_name'] = value
+            elif key == 'track':
+                try:
+                    metadata['track_number'] = int(value)
+                except ValueError:
+                    pass
+            elif key in ('media_type', 'mediatype'):
+                try:
+                    metadata['media_type'] = int(value)
+                except ValueError:
+                    pass
 
         # Parse chapter sections
         elif line.startswith('[CHAPTER]'):
@@ -434,7 +476,14 @@ def parse_ffmetadata_chapters(file_path: str) -> Metadata:
         author=metadata['author'],
         narrator=metadata['narrator'],
         total_duration=metadata['total_duration'],
-        chapters=chapters
+        chapters=chapters,
+        year=metadata['year'],
+        genre=metadata['genre'],
+        comment=metadata['comment'],
+        track_number=metadata['track_number'],
+        sort_name=metadata['sort_name'],
+        media_type=metadata['media_type'],
+        album=metadata.get('album')
     )
 
 def parse_m4btool_chapters(file_path: str) -> Metadata:
@@ -513,7 +562,8 @@ def parse_m4btool_chapters(file_path: str) -> Metadata:
         author=None,
         narrator=None,
         total_duration=timedelta(seconds=max_duration),
-        chapters=chapters
+        chapters=chapters,
+        album=title
     )
 
 def parse_audacity_chapters(file_path: str) -> Metadata:
@@ -586,7 +636,8 @@ def parse_audacity_chapters(file_path: str) -> Metadata:
         author=None,
         narrator=None,
         total_duration=timedelta(seconds=max_duration),
-        chapters=chapters
+        chapters=chapters,
+        album=title
     )
 
 def detect_chapter_format(file_path: str) -> Optional[str]:
@@ -678,14 +729,18 @@ def export_ffmetadata(metadata: Metadata, output_path: str):
 
     if metadata.title:
         lines.append(f"title={metadata.title}")
-        lines.append(f"album={metadata.title}")
-        lines.append(f"sort_name={metadata.title}")
-        lines.append(f"sortname={metadata.title}")
-        lines.append(f"sonm={metadata.title}")
+        album = metadata.album or metadata.title
+        lines.append(f"album={album}")
+        sort_name = metadata.sort_name or metadata.title
+        lines.append(f"sort_name={sort_name}")
+        lines.append(f"sortname={sort_name}")
+        lines.append(f"sonm={sort_name}")
     if metadata.author:
         lines.append(f"artist={metadata.author}")
-    lines.append("track=1")
-    lines.append("media_type=2")
+    track_number = metadata.track_number if metadata.track_number is not None else 1
+    lines.append(f"track={track_number}")
+    media_type = metadata.media_type if metadata.media_type is not None else 2
+    lines.append(f"media_type={media_type}")
     if metadata.year:
         lines.append(f"date={metadata.year}")
     if metadata.genre:

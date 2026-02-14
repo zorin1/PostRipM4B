@@ -327,3 +327,16 @@ For issues, questions, or feature requests:
 ---
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
+
+## Version 1.1.0 - Latest Updates
+
+This release includes several improvements and refinements to enhance your audiobook conversion experience:
+
+- Improved chapter parsing accuracy across all supported formats
+- Enhanced GUI responsiveness and usability
+- Optimized parallel processing for faster conversions
+- Better error handling and logging for troubleshooting
+- Updated dependencies for improved stability and compatibility
+- Minor bug fixes and performance enhancements
+
+Thank you for using PostRipM4B! Please continue to provide feedback and report issues on GitHub.

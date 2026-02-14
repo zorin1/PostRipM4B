@@ -156,6 +156,10 @@ class Config:
     year: Optional[int] = None
     genre: Optional[str] = None
     comment: Optional[str] = None
+    track_number: Optional[int] = None
+    sort_name: Optional[str] = None
+    media_type: Optional[int] = None
+    album: Optional[str] = None
 
     # Processing
     workers: Optional[int] = None  # Auto-detect if None
@@ -183,6 +187,85 @@ class Config:
     # NEW: For edited chapters from GUI
     edited_metadata: Optional[chapter_parser.Metadata] = None
     temp_chapter_dir: Optional[str] = None  # For cleanup
+
+    @classmethod
+    def from_args(cls, args):
+        """Create Config from command-line arguments"""
+        config = cls()
+
+        # Input/Output
+        if hasattr(args, 'input_dir') and args.input_dir:
+            config.input_dir = args.input_dir
+        if hasattr(args, 'output_file') and args.output_file:
+            config.output_file = args.output_file
+        if hasattr(args, 'output_dir') and args.output_dir:
+            config.output_dir = Path(args.output_dir)
+
+        # Cover art
+        if hasattr(args, 'cover_file') and args.cover_file:
+            config.cover_file = args.cover_file
+        if hasattr(args, 'no_cover'):
+            config.no_cover = args.no_cover
+
+        # Book metadata
+        if hasattr(args, 'title'):
+            config.title = args.title
+        if hasattr(args, 'author'):
+            config.author = args.author
+        if hasattr(args, 'year'):
+            config.year = args.year
+        if hasattr(args, 'genre'):
+            config.genre = args.genre
+        if hasattr(args, 'comment'):
+            config.comment = args.comment
+        if hasattr(args, 'track_number'):
+            config.track_number = args.track_number
+        if hasattr(args, 'sort_name'):
+            config.sort_name = args.sort_name
+        if hasattr(args, 'media_type'):
+            config.media_type = args.media_type
+        if hasattr(args, 'album'):
+            config.album = args.album
+
+        # Processing
+        if hasattr(args, 'workers'):
+            config.workers = args.workers
+        if hasattr(args, 'no_optimize'):
+            config.no_optimize = args.no_optimize
+        if hasattr(args, 'keep_temp'):
+            config.keep_temp = args.keep_temp
+        if hasattr(args, 'temp_dir') and args.temp_dir:
+            config.temp_dir = args.temp_dir
+        if hasattr(args, 'max_retries'):
+            config.max_retries = args.max_retries
+
+        # Output Control
+        if hasattr(args, 'verbosity'):
+            config.verbosity = args.verbosity
+        if hasattr(args, 'style'):
+            config.style = args.style
+        if hasattr(args, 'log_file'):
+            config.log_file = args.log_file
+
+        # Batch Processing
+        if hasattr(args, 'batch'):
+            config.batch = args.batch
+        if hasattr(args, 'recursive'):
+            config.recursive = args.recursive
+        if hasattr(args, 'pattern'):
+            config.pattern = args.pattern
+        if hasattr(args, 'exclude'):
+            config.exclude = args.exclude
+
+        # Advanced
+        if hasattr(args, 'ffmpeg_path'):
+            config.ffmpeg_path = args.ffmpeg_path
+        if hasattr(args, 'ffprobe_path'):
+            config.ffprobe_path = args.ffprobe_path
+        if hasattr(args, 'force_reencode'):
+            config.force_reencode = args.force_reencode
+
+        return config
 
     @classmethod
     def from_args(cls, args):
@@ -623,7 +706,8 @@ class AudioBookConverter:
             else:
                 os.rename(intermediate_file, self.output_file)
 
-            self._set_itunes_sort_name(self.output_file, metadata.title)
+            sort_name = metadata.sort_name or metadata.title
+            self._set_itunes_sort_name(self.output_file, sort_name)
 
             # Cleanup - NEW: Clean up temp chapter directory
             if not self.config.keep_temp:
@@ -690,7 +774,11 @@ class AudioBookConverter:
                         chapters=metadata.chapters,
                         year=self.config.year or metadata.year,
                         genre=self.config.genre or metadata.genre,
-                        comment=self.config.comment or metadata.comment
+                        comment=self.config.comment or metadata.comment,
+                        track_number=self.config.track_number or metadata.track_number,
+                        sort_name=self.config.sort_name or metadata.sort_name,
+                        media_type=self.config.media_type or metadata.media_type,
+                        album=self.config.album or metadata.album
                     )
 
                 self.progress.step_end(True, f"'{metadata.title}' by {metadata.author or 'Unknown'}")
@@ -733,7 +821,11 @@ class AudioBookConverter:
                         chapters=metadata.chapters,
                         year=self.config.year or metadata.year,
                         genre=self.config.genre or metadata.genre,
-                        comment=self.config.comment or metadata.comment
+                        comment=self.config.comment or metadata.comment,
+                        track_number=self.config.track_number or metadata.track_number,
+                        sort_name=self.config.sort_name or metadata.sort_name,
+                        media_type=self.config.media_type or metadata.media_type,
+                        album=self.config.album or metadata.album
                     )
 
                 self.progress.step_end(True, f"'{metadata.title}' by {metadata.author or 'Unknown'}")
@@ -762,7 +854,11 @@ class AudioBookConverter:
             chapters=[],
             year=self.config.year,
             genre=self.config.genre,
-            comment=self.config.comment
+            comment=self.config.comment,
+            track_number=self.config.track_number,
+            sort_name=self.config.sort_name,
+            media_type=self.config.media_type,
+            album=self.config.album or title
         )
 
     def _find_mp3_files(self) -> List[str]:
@@ -1634,7 +1730,7 @@ Examples:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.0.10"
+        version="%(prog)s 1.1.0"
     )
 
     # Parse arguments

@@ -907,6 +907,19 @@ class ConverterMainWindow(QMainWindow):
         if metadata.media_type is not None:
             self.media_type_spin.setValue(metadata.media_type)
 
+    def update_current_metadata_from_fields(self):
+        if not self.current_metadata:
+            return
+        self.current_metadata.title = self.title_edit.text().strip() or ""
+        self.current_metadata.author = self.author_edit.text().strip() or None
+        self.current_metadata.album = self.album_edit.text().strip() or None
+        self.current_metadata.year = self.year_spin.value()
+        self.current_metadata.genre = self.genre_edit.text().strip() or None
+        self.current_metadata.comment = self.comment_edit.text().strip() or None
+        self.current_metadata.track_number = self.track_spin.value()
+        self.current_metadata.sort_name = self.sort_name_edit.text().strip() or None
+        self.current_metadata.media_type = self.media_type_spin.value()
+
     def scan_batch_directories(self):
         """Scan for subdirectories with MP3 files"""
         source_dir = self.source_edit.text()
@@ -1066,9 +1079,10 @@ class ConverterMainWindow(QMainWindow):
 
     def on_chapters_updated(self, updated_metadata):
         """Handle updated metadata from chapter editor"""
-        self.current_metadata = updated_metadata
+        self.update_current_metadata_from_fields()
+        self.current_metadata.chapters = updated_metadata.chapters
+        self.current_metadata.total_duration = updated_metadata.total_duration
         self.update_chapter_display()
-        self.populate_metadata_fields(updated_metadata)
 
         QMessageBox.information(self, "Chapters Updated",
                               f"Updated {len(updated_metadata.chapters)} chapters.")
@@ -1078,6 +1092,8 @@ class ConverterMainWindow(QMainWindow):
         if not self.current_metadata:
             QMessageBox.warning(self, "Warning", "No chapters loaded. Please load chapters first.")
             return
+
+        self.update_current_metadata_from_fields()
 
         if ChapterEditorDialog is None:
             QMessageBox.warning(self, "Error", "Chapter editor module not available.")

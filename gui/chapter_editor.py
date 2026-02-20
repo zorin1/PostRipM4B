@@ -1,19 +1,14 @@
 # gui/chapter_editor.py (simplified version)
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGroupBox,
-                             QLabel, QLineEdit, QPushButton, QSpinBox,
-                             QTextEdit, QTableWidget, QTableWidgetItem,
+                             QLabel, QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QMessageBox, QFileDialog,
                              QAbstractItemView, QComboBox, QWidget)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
-from datetime import timedelta
-import os
-from pathlib import Path
 import chapter_parser
 
 
 class ChapterEditorDialog(QDialog):
-    """Dialog for editing chapters and metadata"""
+    """Dialog for editing chapters"""
 
     chapters_updated = pyqtSignal(object)  # Emits updated Metadata object
 
@@ -36,58 +31,6 @@ class ChapterEditorDialog(QDialog):
 
         # Main layout
         layout = QVBoxLayout(self)
-
-        # Metadata section
-        metadata_group = QGroupBox("📚 Book Metadata")
-        metadata_layout = QVBoxLayout()
-
-        # Title
-        title_layout = QHBoxLayout()
-        title_layout.addWidget(QLabel("Title:"))
-        self.title_edit = QLineEdit(self.metadata.title or "")
-        self.title_edit.textChanged.connect(self.on_metadata_changed)
-        title_layout.addWidget(self.title_edit)
-        metadata_layout.addLayout(title_layout)
-
-        # Author
-        author_layout = QHBoxLayout()
-        author_layout.addWidget(QLabel("Author:"))
-        self.author_edit = QLineEdit(self.metadata.author or "")
-        self.author_edit.textChanged.connect(self.on_metadata_changed)
-        author_layout.addWidget(self.author_edit)
-        metadata_layout.addLayout(author_layout)
-
-        # Year and Genre
-        year_genre_layout = QHBoxLayout()
-
-        # Year
-        year_genre_layout.addWidget(QLabel("Year:"))
-        self.year_spin = QSpinBox()
-        self.year_spin.setRange(1000, 2100)
-        self.year_spin.setValue(self.metadata.year or 2024)
-        self.year_spin.valueChanged.connect(self.on_metadata_changed)
-        year_genre_layout.addWidget(self.year_spin)
-
-        year_genre_layout.addWidget(QLabel("Genre:"))
-        self.genre_edit = QLineEdit(self.metadata.genre or "Audiobook")
-        self.genre_edit.textChanged.connect(self.on_metadata_changed)
-        year_genre_layout.addWidget(self.genre_edit)
-
-        year_genre_layout.addStretch()
-        metadata_layout.addLayout(year_genre_layout)
-
-        # Comment
-        comment_layout = QVBoxLayout()
-        comment_layout.addWidget(QLabel("Comment:"))
-        self.comment_edit = QTextEdit()
-        self.comment_edit.setMaximumHeight(60)
-        self.comment_edit.setText(self.metadata.comment or "")
-        self.comment_edit.textChanged.connect(self.on_metadata_changed)
-        comment_layout.addWidget(self.comment_edit)
-        metadata_layout.addLayout(comment_layout)
-
-        metadata_group.setLayout(metadata_layout)
-        layout.addWidget(metadata_group)
 
         # Chapters section
         chapters_group = QGroupBox(f"📖 Chapters ({len(self.metadata.chapters)} chapters)")
@@ -266,11 +209,6 @@ class ChapterEditorDialog(QDialog):
                 original_title = self.metadata.chapters[row].title
                 item.setText(original_title)
 
-    def on_metadata_changed(self):
-        """Handle metadata field changes"""
-        self.modified = True
-        self.update_validation_status()
-
     def add_chapter(self):
         """Add a new chapter"""
         # Get selected row or add at end
@@ -364,20 +302,11 @@ class ChapterEditorDialog(QDialog):
 
     def update_validation_status(self):
         """Update validation status display"""
-        # Update metadata from fields
-        self.metadata.title = self.title_edit.text().strip()
-        self.metadata.author = self.author_edit.text().strip()
-        self.metadata.year = self.year_spin.value()
-        self.metadata.genre = self.genre_edit.text().strip()
-        self.metadata.comment = self.comment_edit.toPlainText().strip()
-
-        # Validate
         errors = self.metadata.validate(self.audio_duration)
 
         if errors:
             self.validation_label.setText("❌ Issues found (hover for details)")
             self.validation_label.setStyleSheet("color: red; font-weight: bold;")
-            # Show first error as tooltip
             self.validation_label.setToolTip("\n".join(errors))
             self.use_btn.setEnabled(False)
         else:
@@ -386,7 +315,6 @@ class ChapterEditorDialog(QDialog):
             self.validation_label.setToolTip("")
             self.use_btn.setEnabled(True)
 
-        # Update chapters count in group title
         chapters_group = self.findChild(QGroupBox, "")
         if chapters_group:
             chapters_group.setTitle(f"📖 Chapters ({len(self.metadata.chapters)} chapters)")

@@ -328,7 +328,7 @@ For issues, questions, or feature requests:
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
 
-## Version 1.1.0 - Latest Updates
+## Version 1.2.0 - Latest Updates
 
 This release includes several improvements and refinements to enhance your audiobook conversion experience:
 

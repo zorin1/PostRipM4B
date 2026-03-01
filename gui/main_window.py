@@ -23,7 +23,7 @@ try:
     # Import everything from PostRipM4B
     from PostRipM4B import (
         Config, AudioBookConverter, Verbosity, OutputStyle, get_default_music_dir,
-        ProgressTracker
+        ProgressTracker, VERSION
     )
     import chapter_parser  # NEW: Import the chapter parser
 except ImportError as e:
@@ -196,7 +196,7 @@ class ConverterMainWindow(QMainWindow):
 
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("MP3 to M4B Audiobook Converter")
+        self.setWindowTitle(f"MP3 to M4B Audiobook Converter v{VERSION}")
         self.setGeometry(100, 100, 900, 700)
 
         # Central widget and main layout
@@ -430,7 +430,8 @@ class ConverterMainWindow(QMainWindow):
         meta_layout.addWidget(QLabel("Year:"), 1, 2)
         self.year_spin = QSpinBox()
         self.year_spin.setRange(1000, 2100)
-        self.year_spin.setValue(2024)
+        import datetime
+        self.year_spin.setValue(datetime.date.today().year)
         meta_layout.addWidget(self.year_spin, 1, 3)
 
         meta_layout.addWidget(QLabel("Genre:"), 2, 0)
@@ -902,8 +903,8 @@ class ConverterMainWindow(QMainWindow):
             self.comment_edit.setText(metadata.comment)
         if metadata.track_number:
             self.track_spin.setValue(metadata.track_number)
-        if metadata.sort_name:
-            self.sort_name_edit.setText(metadata.sort_name)
+        sort_name_value = metadata.sort_name or metadata.title or ""
+        self.sort_name_edit.setText(sort_name_value)
         if metadata.media_type is not None:
             self.media_type_spin.setValue(metadata.media_type)
 
@@ -1205,8 +1206,20 @@ class ConverterMainWindow(QMainWindow):
                 self.channels_combo.setCurrentText("2 (Stereo)")
 
         # Metadata settings
-        if hasattr(self.cli_args, 'title') and self.cli_args.title:
-            self.title_edit.setText(self.cli_args.title)
+        cli_title = self.cli_args.title if hasattr(self.cli_args, 'title') and self.cli_args.title else None
+        cli_sort_name = self.cli_args.sort_name if hasattr(self.cli_args, 'sort_name') and self.cli_args.sort_name else None
+        cli_album = self.cli_args.album if hasattr(self.cli_args, 'album') and self.cli_args.album else None
+
+        if cli_title:
+            self.title_edit.setText(cli_title)
+        if cli_sort_name:
+            self.sort_name_edit.setText(cli_sort_name)
+        elif cli_title:
+            self.sort_name_edit.setText(cli_title)
+        if cli_album:
+            self.album_edit.setText(cli_album)
+        elif cli_title:
+            self.album_edit.setText(cli_title)
 
         if hasattr(self.cli_args, 'author') and self.cli_args.author:
             self.author_edit.setText(self.cli_args.author)
@@ -1219,6 +1232,12 @@ class ConverterMainWindow(QMainWindow):
 
         if hasattr(self.cli_args, 'comment') and self.cli_args.comment:
             self.comment_edit.setText(self.cli_args.comment)
+
+        if hasattr(self.cli_args, 'track_num') and self.cli_args.track_num is not None:
+            self.track_spin.setValue(self.cli_args.track_num)
+
+        if hasattr(self.cli_args, 'media_type') and self.cli_args.media_type is not None:
+            self.media_type_spin.setValue(self.cli_args.media_type)
 
         # Chapter files
         chapter_file = None

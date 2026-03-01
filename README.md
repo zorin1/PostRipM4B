@@ -184,9 +184,15 @@ python PostRipM4b.py /path/to/extracted/audiobook
 ### Book Metadata (overrides chapter file metadata)
 - `--title`: Override book title
 - `--author`: Override author
-- `--year`: Set release year
+- `--year`: Set release year (default: current year)
 - `--genre`: Set genre
 - `--comment`: Add comment/description
+- `--track-num`: Track number (default: 1)
+- `--sort-name`: iTunes sort name (default: value of `--title` if provided, otherwise from metadata file)
+- `--media-type`: iTunes media type (default: 2)
+- `--album`: Album tag (default: value of `--title` if provided, otherwise from metadata file)
+
+**Title-based defaults:** When `--title` is provided and `--album` or `--sort-name` are not explicitly set, both `album` and `sort_name` are automatically populated with the title value. If `--album` or `--sort-name` are explicitly provided, those values take precedence. This same behavior applies in GUI mode — loading metadata will populate Sort Name and Album from the title if those fields are not already set in the source metadata.
 
 ### Processing
 - `-w, --workers`: Number of parallel workers (default: auto-detect)
@@ -242,8 +248,6 @@ PostRipM4B/
 │   └── chapter_editor.py  # Chapter editor dialog
 └── README.md              # This file
 ```
-
-## Technical Details
 
 ## Technical Details
 
@@ -327,6 +331,12 @@ For issues, questions, or feature requests:
 ---
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
+
+## Version 1.2.1
+
+- Fixed CLI metadata overrides (`--track-num`, `--album`, `--sort-name`, `--media-type`) being dropped when chapter timing adjustments were applied during conversion
+- Fixed GUI not populating `--track-num`, `--sort-name`, `--album`, and `--media-type` values from CLI args in the Metadata tab
+- Fixed GUI `--title` not automatically defaulting Album and Sort Name fields when `--album` and `--sort-name` are not explicitly passed
 
 ## Version 1.2.0 - Latest Updates
 

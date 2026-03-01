@@ -43,6 +43,8 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
+VERSION = "1.2.1"
+
 # Optional imports for audio metadata
 try:
     from mutagen.mp4 import MP4, MP4Cover
@@ -339,14 +341,42 @@ class Config:
         if hasattr(args, 'author'):
             config.author = args.author
 
-        if hasattr(args, 'year'):
+        import datetime
+        current_year = datetime.date.today().year
+
+        if hasattr(args, 'year') and args.year is not None:
             config.year = args.year
+        else:
+            config.year = current_year
 
         if hasattr(args, 'genre'):
             config.genre = args.genre
 
         if hasattr(args, 'comment'):
             config.comment = args.comment
+
+        if hasattr(args, 'track_num') and args.track_num is not None:
+            config.track_number = args.track_num
+        else:
+            config.track_number = 1
+
+        if hasattr(args, 'media_type') and args.media_type is not None:
+            config.media_type = args.media_type
+        else:
+            config.media_type = 2
+
+        explicit_sort_name = hasattr(args, 'sort_name') and args.sort_name is not None
+        explicit_album = hasattr(args, 'album') and args.album is not None
+
+        if explicit_sort_name:
+            config.sort_name = args.sort_name
+        elif config.title:
+            config.sort_name = config.title
+
+        if explicit_album:
+            config.album = args.album
+        elif config.title:
+            config.album = config.title
 
         # Processing
         if hasattr(args, 'workers'):
@@ -764,22 +794,21 @@ class AudioBookConverter:
                     format=self.config.chapter_format
                 )
 
-                # Override with command-line values if specified
-                if self.config.title:
-                    metadata = chapter_parser.Metadata(
-                        title=self.config.title,
-                        author=self.config.author or metadata.author,
-                        narrator=metadata.narrator,
-                        total_duration=metadata.total_duration,
-                        chapters=metadata.chapters,
-                        year=self.config.year or metadata.year,
-                        genre=self.config.genre or metadata.genre,
-                        comment=self.config.comment or metadata.comment,
-                        track_number=self.config.track_number or metadata.track_number,
-                        sort_name=self.config.sort_name or metadata.sort_name,
-                        media_type=self.config.media_type or metadata.media_type,
-                        album=self.config.album or metadata.album
-                    )
+                # Always apply CLI overrides (CLI values take precedence over metadata file)
+                metadata = chapter_parser.Metadata(
+                    title=self.config.title or metadata.title,
+                    author=self.config.author or metadata.author,
+                    narrator=metadata.narrator,
+                    total_duration=metadata.total_duration,
+                    chapters=metadata.chapters,
+                    year=self.config.year if self.config.year is not None else metadata.year,
+                    genre=self.config.genre or metadata.genre,
+                    comment=self.config.comment or metadata.comment,
+                    track_number=self.config.track_number if self.config.track_number is not None else metadata.track_number,
+                    sort_name=self.config.sort_name or metadata.sort_name,
+                    media_type=self.config.media_type if self.config.media_type is not None else metadata.media_type,
+                    album=self.config.album or metadata.album
+                )
 
                 self.progress.step_end(True, f"'{metadata.title}' by {metadata.author or 'Unknown'}")
                 return metadata
@@ -811,22 +840,21 @@ class AudioBookConverter:
                     format=self.config.chapter_format
                 )
 
-                # Override with command-line values if specified
-                if self.config.title:
-                    metadata = chapter_parser.Metadata(
-                        title=self.config.title,
-                        author=self.config.author or metadata.author,
-                        narrator=metadata.narrator,
-                        total_duration=metadata.total_duration,
-                        chapters=metadata.chapters,
-                        year=self.config.year or metadata.year,
-                        genre=self.config.genre or metadata.genre,
-                        comment=self.config.comment or metadata.comment,
-                        track_number=self.config.track_number or metadata.track_number,
-                        sort_name=self.config.sort_name or metadata.sort_name,
-                        media_type=self.config.media_type or metadata.media_type,
-                        album=self.config.album or metadata.album
-                    )
+                # Always apply CLI overrides (CLI values take precedence over metadata file)
+                metadata = chapter_parser.Metadata(
+                    title=self.config.title or metadata.title,
+                    author=self.config.author or metadata.author,
+                    narrator=metadata.narrator,
+                    total_duration=metadata.total_duration,
+                    chapters=metadata.chapters,
+                    year=self.config.year if self.config.year is not None else metadata.year,
+                    genre=self.config.genre or metadata.genre,
+                    comment=self.config.comment or metadata.comment,
+                    track_number=self.config.track_number if self.config.track_number is not None else metadata.track_number,
+                    sort_name=self.config.sort_name or metadata.sort_name,
+                    media_type=self.config.media_type if self.config.media_type is not None else metadata.media_type,
+                    album=self.config.album or metadata.album
+                )
 
                 self.progress.step_end(True, f"'{metadata.title}' by {metadata.author or 'Unknown'}")
                 return metadata
@@ -1151,7 +1179,11 @@ class AudioBookConverter:
                 chapters=adjusted_chapters,
                 year=metadata.year,
                 genre=metadata.genre,
-                comment=metadata.comment
+                comment=metadata.comment,
+                track_number=metadata.track_number,
+                sort_name=metadata.sort_name,
+                media_type=metadata.media_type,
+                album=metadata.album
             )
 
         # Create metadata.txt in ffmetadata format
@@ -1629,6 +1661,28 @@ Examples:
         "--comment",
         help="Add comment/description"
     )
+    parser.add_argument(
+        "--track-num",
+        type=int,
+        default=None,
+        help="Track number (default: 1)"
+    )
+    parser.add_argument(
+        "--sort-name",
+        default=None,
+        help="iTunes sort name (default: title if --title is provided)"
+    )
+    parser.add_argument(
+        "--media-type",
+        type=int,
+        default=None,
+        help="iTunes media type (default: 2)"
+    )
+    parser.add_argument(
+        "--album",
+        default=None,
+        help="Album tag (default: title if --title is provided)"
+    )
 
     # Processing
     parser.add_argument(
@@ -1730,7 +1784,7 @@ Examples:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.2.0"
+        version=f"%(prog)s {VERSION}"
     )
 
     # Parse arguments

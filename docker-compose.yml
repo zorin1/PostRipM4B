@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "3755:8080"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./output:/app/output
+    network_mode: "bridge" # Uses the existing default bridge

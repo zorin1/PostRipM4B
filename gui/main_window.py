@@ -190,6 +190,7 @@ class ConverterMainWindow(QMainWindow):
         self.mp3_analyzer_thread = None
         self.output_file = None
         self.current_metadata = None  # Store loaded metadata
+        self.metadata_source_dir = None  # Source directory used for the current metadata
         self.mp3_duration = 0.0  # Store total MP3 duration
 
         self.init_ui()
@@ -767,6 +768,7 @@ class ConverterMainWindow(QMainWindow):
         )
         if directory:
             self.source_edit.setText(directory)
+            self.metadata_source_dir = None
             # Auto-set output directory
             if not self.dest_edit.text():
                 output_dir = Path(directory) / 'm4b'
@@ -874,9 +876,16 @@ class ConverterMainWindow(QMainWindow):
     def on_source_edit_finished(self):
         source_dir = self.source_edit.text()
         if source_dir:
+            normalized_source_dir = str(Path(source_dir).absolute())
+            if normalized_source_dir == self.metadata_source_dir:
+                return
             self.auto_load_metadata_from_source(source_dir)
 
     def auto_load_metadata_from_source(self, source_dir):
+        source_dir = str(Path(source_dir).absolute())
+        if source_dir == self.metadata_source_dir:
+            return
+
         metadata_path = Path(source_dir) / "metadata" / "metadata.json"
         if not metadata_path.exists():
             return
@@ -884,6 +893,7 @@ class ConverterMainWindow(QMainWindow):
             self.chapter_file_edit.setText(str(metadata_path))
             self.chapter_format_combo.setCurrentText("Libby (metadata.json)")
             self.current_metadata = chapter_parser.load_chapters(str(metadata_path), format='libby')
+            self.metadata_source_dir = source_dir
             self.populate_metadata_fields(self.current_metadata)
             self.chapters_status_label.setText("Metadata loaded from metadata.json")
             self.analyze_mp3_duration()
@@ -987,6 +997,7 @@ class ConverterMainWindow(QMainWindow):
 
             # Load chapters
             self.current_metadata = chapter_parser.load_chapters(chapter_file, format=chapter_format)
+            self.metadata_source_dir = str(Path(self.source_edit.text()).absolute())
 
             # Update metadata fields if they're empty
             if not self.title_edit.text() and self.current_metadata.title:

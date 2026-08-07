@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PostRipM4B Audiobook Converter
+GenericName=Audiobook Converter
+Comment=Convert MP3 audiobooks to M4B
+Exec=/home/mpkowski/Downloads/github/PostRipM4B/PostRipM4B.sh
+Icon=/home/mpkowski/Downloads/github/PostRipM4B/assets/icon.png
+Terminal=false
+Categories=AudioVideo;Audio;Multimedia;
+StartupNotify=true
+StartupWMClass=PostRipM4B

@@ -210,6 +210,7 @@ python PostRipM4b.py /path/to/extracted/audiobook
 
 ### Batch Processing
 - `--batch`: Process all subdirectories as separate audiobooks
+- `--output-pattern`: Output filename pattern with `{title}`, `{author}`, `{year}` placeholders (default: `{title}`). Used for every book in batch mode and for the output filename in single-book mode.)
 - `-r, --recursive`: Recursively search for MP3 files
 - `--pattern`: File pattern to match (default: *.mp3)
 - `--exclude`: Exclude files matching pattern
@@ -331,6 +332,18 @@ For issues, questions, or feature requests:
 ---
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
+
+## Version 1.3
+
+This release makes **batch processing fully functional** in both the GUI and the CLI.
+
+- **GUI batch mode is now working**: the "🔄 Batch" tab's *Scan Subdirectories*, *Select All*, and *Deselect All* now drive the actual conversion. Each selected folder is converted as its own independent audiobook, one at a time, with progress logs prefixed per book (e.g. `[bookname 2/5]`).
+- **CLI `--batch` is now real**: previously the `--batch` flag was stored but never used. It now expands the input directory into its subdirectories and runs a separate conversion per folder.
+- **Per-folder output**: each book writes to its own `<folder>/m4b` directory. The Output Directory setting (GUI Input tab / `--output-dir`) is ignored in batch mode, so books never collide.
+- **Batch-specific metadata**: metadata-tab values are ignored in batch mode. Each folder auto-detects its own metadata/chapter file (`metadata/metadata.json`, `metadata.txt`, `chapters.txt`, etc.). When none is found — or fields are missing — the folder name is used as the Title/Album/Sort Name fallback, with Track = 1 and Media Type = 2. A cover image is auto-detected per folder.
+- **New `--output-pattern` flag** (`{title}`, `{author}`, `{year}`): controls the output filename for every book (GUI and CLI), mirroring the Batch tab's Output Filename Pattern field.
+- **Batch does not stop on failure**: if one book fails, the remaining books still convert, and a summary ("N of Y books completed successfully") is reported at the end.
+- Single-book conversion behavior is unchanged.
 
 ## Version 1.2.1
 

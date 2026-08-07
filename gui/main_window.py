@@ -36,7 +36,8 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QSpinBox, QComboBox, QCheckBox,
                              QTextEdit, QProgressBar, QFileDialog, QMessageBox,
                              QApplication, QGridLayout, QSplitter, QListWidget,
-                             QListWidgetItem, QToolButton, QStyle, QStatusBar, QDialog)
+                             QListWidgetItem, QToolButton, QStyle, QStatusBar, QDialog,
+                             QStyleOptionViewItem)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSettings
 from PyQt5.QtGui import QIcon, QFont, QPixmap
 
@@ -62,6 +63,41 @@ except ImportError:
         ChapterEditorDialog = None
 
 
+class ClickableCheckListWidget(QListWidget):
+    """QListWidget where clicking anywhere on an item toggles its checkbox.
+
+    Clicking the checkbox indicator itself still toggles normally; clicking on
+    the item text also toggles the check state instead of just selecting.
+    """
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            index = self.indexAt(event.pos())
+            if index.isValid():
+                item = self.itemFromIndex(index)
+                if item is not None and item.flags() & Qt.ItemIsUserCheckable:
+                    check_rect = self._check_indicator_rect(index, item)
+                    if check_rect.isValid() and check_rect.contains(event.pos()):
+                        # Click on the indicator: let the default handler toggle.
+                        super().mousePressEvent(event)
+                        return
+                    # Click elsewhere on the item: toggle the check state.
+                    new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                    item.setCheckState(new_state)
+                    return
+        super().mousePressEvent(event)
+
+    def _check_indicator_rect(self, index, item):
+        """Return the rect of the checkbox indicator for the given item."""
+        opt = QStyleOptionViewItem()
+        opt.initFrom(self)
+        opt.rect = self.visualItemRect(item)
+        opt.features = QStyleOptionViewItem.HasCheckIndicator
+        opt.checkState = item.checkState()
+        opt.index = index
+        return self.style().subElementRect(QStyle.SE_ItemViewItemCheckIndicator, opt, self)
+
+
 class WorkerThread(QThread):
     """Thread for running conversion without freezing GUI"""
     progress_signal = pyqtSignal(str, str)  # (message_type, message)
@@ -72,6 +108,7 @@ class WorkerThread(QThread):
         super().__init__()
         self.config = config
         self.converter = None
+        self.prefix = ""  # Optional per-folder log prefix (e.g. "[book 2/5] ")
 
     def run(self):
         try:
@@ -83,15 +120,18 @@ class WorkerThread(QThread):
             # Replace ALL output methods with signal emitters
             # This prevents console output and sends everything to GUI
 
-            progress.step_start = lambda msg: self.progress_signal.emit('step_start', msg)
+            def _pfx(msg):
+                return f"{self.prefix}{msg}"
+
+            progress.step_start = lambda msg: self.progress_signal.emit('step_start', _pfx(msg))
             progress.step_end = lambda success=True, extra="": self.progress_signal.emit('step_end', f"{success}:{extra}")
-            progress.info = lambda msg: self.progress_signal.emit('info', msg)
-            progress.header = lambda msg: self.progress_signal.emit('header', msg)
-            progress.success = lambda msg: self.progress_signal.emit('success', msg)
-            progress.warning = lambda msg: self.progress_signal.emit('warning', msg)
-            progress.error = lambda msg: self.progress_signal.emit('error', msg)
-            progress.debug = lambda msg: self.progress_signal.emit('debug', msg)
-            progress.ffmpeg_output = lambda msg: self.progress_signal.emit('ffmpeg_output', msg)
+            progress.info = lambda msg: self.progress_signal.emit('info', _pfx(msg))
+            progress.header = lambda msg: self.progress_signal.emit('header', _pfx(msg))
+            progress.success = lambda msg: self.progress_signal.emit('success', _pfx(msg))
+            progress.warning = lambda msg: self.progress_signal.emit('warning', _pfx(msg))
+            progress.error = lambda msg: self.progress_signal.emit('error', _pfx(msg))
+            progress.debug = lambda msg: self.progress_signal.emit('debug', _pfx(msg))
+            progress.ffmpeg_output = lambda msg: self.progress_signal.emit('ffmpeg_output', _pfx(msg))
             progress.summary = lambda stats: self.stats_signal.emit(stats)
             progress.progress = lambda current, total, msg="": self.progress_signal.emit('progress', f"{current}/{total}:{msg}")
 
@@ -195,10 +235,26 @@ class ConverterMainWindow(QMainWindow):
 
         self.init_ui()
 
+    def load_application_icon(self):
+        """Load the application icon from the assets folder if present."""
+        candidates = [
+            project_dir / 'assets' / 'icon.png',
+            project_dir / 'assets' / 'icon.svg',
+        ]
+        for path in candidates:
+            if path.exists():
+                return QIcon(str(path))
+        return None
+
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle(f"MP3 to M4B Audiobook Converter v{VERSION}")
         self.setGeometry(100, 100, 900, 700)
+
+        # Apply application icon
+        icon = self.load_application_icon()
+        if icon:
+            self.setWindowIcon(icon)
 
         # Central widget and main layout
         central_widget = QWidget()
@@ -650,17 +706,17 @@ class ConverterMainWindow(QMainWindow):
         self.batch_check = QCheckBox("Process all subdirectories")
         self.batch_check.toggled.connect(self.toggle_batch_mode)
 
-        self.batch_list = QListWidget()
-        self.batch_list.setSelectionMode(QListWidget.MultiSelection)
+        self.batch_list = ClickableCheckListWidget()
+        self.batch_list.setSelectionMode(QListWidget.NoSelection)
 
         self.scan_batch_btn = QPushButton("Scan Subdirectories")
         self.scan_batch_btn.clicked.connect(self.scan_batch_directories)
 
         select_buttons = QHBoxLayout()
         self.select_all_btn = QPushButton("Select All")
-        self.select_all_btn.clicked.connect(lambda: self.batch_list.selectAll())
+        self.select_all_btn.clicked.connect(self.select_all_batch)
         self.deselect_all_btn = QPushButton("Deselect All")
-        self.deselect_all_btn.clicked.connect(lambda: self.batch_list.clearSelection())
+        self.deselect_all_btn.clicked.connect(self.deselect_all_batch)
 
         select_buttons.addWidget(self.select_all_btn)
         select_buttons.addWidget(self.deselect_all_btn)
@@ -678,7 +734,7 @@ class ConverterMainWindow(QMainWindow):
         pattern_group = QGroupBox("Output Filename Pattern")
         pattern_layout = QVBoxLayout()
 
-        self.pattern_edit_batch = QLineEdit("{title} by {author}")
+        self.pattern_edit_batch = QLineEdit("{title}")
         pattern_layout.addWidget(QLabel("Pattern (available: {title}, {author}, {year}):"))
         pattern_layout.addWidget(self.pattern_edit_batch)
         pattern_layout.addWidget(QLabel("Example: 'My Book by Author' becomes 'My Book by Author.m4b'"))
@@ -940,17 +996,54 @@ class ConverterMainWindow(QMainWindow):
 
         self.batch_list.clear()
         source_path = Path(source_dir)
+        pattern = self.pattern_edit.text() or "*.mp3"
+        import fnmatch
 
         for item in source_path.iterdir():
             if item.is_dir():
-                # Check if directory contains MP3 files
-                mp3_files = list(item.glob("*.mp3"))
+                # Check if directory contains files matching the Input-tab pattern
+                try:
+                    mp3_files = [f for f in item.iterdir()
+                                 if f.is_file() and fnmatch.fnmatch(f.name, pattern)]
+                except OSError:
+                    continue
                 if mp3_files:
                     item_text = f"{item.name} ({len(mp3_files)} MP3 files)"
                     list_item = QListWidgetItem(item_text)
                     list_item.setData(Qt.UserRole, str(item))
                     list_item.setCheckState(Qt.Checked)
                     self.batch_list.addItem(list_item)
+
+    def select_all_batch(self):
+        """Select (check) every batch entry."""
+        for i in range(self.batch_list.count()):
+            self.batch_list.item(i).setCheckState(Qt.Checked)
+
+    def deselect_all_batch(self):
+        """Deselect (uncheck) every batch entry."""
+        for i in range(self.batch_list.count()):
+            self.batch_list.item(i).setCheckState(Qt.Unchecked)
+
+    def get_selected_batch_folders(self):
+        """Collect folder paths for every checked batch entry, in list order."""
+        folders = []
+        for i in range(self.batch_list.count()):
+            item = self.batch_list.item(i)
+            if item.checkState() == Qt.Checked:
+                path = item.data(Qt.UserRole)
+                if path:
+                    folders.append(str(path))
+        return folders
+
+    def using_batch_mode(self):
+        """Return True when batch processing is active.
+
+        Batch mode is active when the "Process all subdirectories" checkbox is
+        checked OR when the user has scanned and checked folders in the Batch
+        list. This ensures selecting folders in the Batch tab actually triggers
+        batch conversion even if the checkbox is left off.
+        """
+        return self.batch_check.isChecked() or bool(self.get_selected_batch_folders())
 
     def load_and_analyze_chapters(self):
         """Load chapters and analyze MP3 files for duration"""
@@ -1323,6 +1416,9 @@ class ConverterMainWindow(QMainWindow):
         if hasattr(self.cli_args, 'batch') and self.cli_args.batch:
             self.batch_check.setChecked(True)
 
+        if hasattr(self.cli_args, 'output_pattern') and self.cli_args.output_pattern:
+            self.pattern_edit_batch.setText(self.cli_args.output_pattern)
+
         if hasattr(self.cli_args, 'recursive') and self.cli_args.recursive:
             self.recursive_check.setChecked(True)
 
@@ -1334,6 +1430,12 @@ class ConverterMainWindow(QMainWindow):
 
     def start_conversion(self):
         """Start the conversion process"""
+        # Batch mode: run one full conversion per selected folder
+        if self.using_batch_mode():
+            self.start_batch_conversion()
+            return
+
+        # Single-book path
         # Validate inputs
         if not self.validate_inputs():
             return
@@ -1373,28 +1475,191 @@ class ConverterMainWindow(QMainWindow):
 
         self.status_bar.showMessage("Conversion started...")
 
-    def create_config_from_gui(self):
-        """Create Config object from GUI values"""
+    def start_batch_conversion(self):
+        """Start batch conversion over the selected directories."""
+        if not self.validate_inputs():
+            return
+
+        folders = self.get_selected_batch_folders()
+        if not folders:
+            QMessageBox.warning(self, "Warning", "No directories selected.\nScan subdirectories and select at least one.")
+            return
+
+        # Reset UI for the whole batch
+        self.progress_bar.setValue(0)
+        self.log_output.clear()
+        self.time_label.setText("Time: --:--:--")
+        self.eta_label.setText("ETA: --:--:--")
+        self.speed_label.setText("Speed: --x")
+        self.workers_label.setText("Workers: --")
+        self.output_file = None
+        self.open_folder_btn.setEnabled(False)
+
+        # Batch bookkeeping
+        self.batch_folders = folders
+        self.batch_total = len(folders)
+        self.batch_index = 0
+        self.batch_success = 0
+
+        # Disable controls during conversion
+        self.set_conversion_controls(False)
+
+        # Start timer
+        self.start_time = time.time()
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_timer)
+        self.timer.start(1000)
+
+        self.status_bar.showMessage(f"Batch starting: {self.batch_total} book(s)")
+        self.log_output.append(f"Batch: {self.batch_total} book(s) selected.")
+        self.run_batch_book(0)
+
+    def run_batch_book(self, index):
+        """Run a single-folder conversion; chain to the next on completion."""
+        if index >= self.batch_total:
+            self.batch_finished()
+            return
+
+        folder = self.batch_folders[index]
+        self.batch_index = index
+        folder_name = os.path.basename(os.path.normpath(folder))
+        self.log_output.append(f"\n═══ [{folder_name} {index + 1}/{self.batch_total}] ═══")
+
+        try:
+            config = self.create_config_from_gui(input_dir=folder, batch=True)
+        except Exception as e:
+            self.log_output.append(f"✗ ERROR setting up '{folder_name}': {e}")
+            self.run_batch_book(index + 1)
+            return
+
+        self.worker_thread = WorkerThread(config)
+        self.worker_thread.prefix = f"[{folder_name} {index + 1}/{self.batch_total}] "
+        self.worker_thread.progress_signal.connect(self.update_progress)
+        self.worker_thread.stats_signal.connect(self.update_stats)
+        self.worker_thread.finished_signal.connect(self.on_batch_book_finished)
+        self.worker_thread.start()
+
+        self.status_bar.showMessage(
+            f"[{folder_name} {index + 1}/{self.batch_total}] Converting..."
+        )
+
+    def on_batch_book_finished(self, success, output_file):
+        """Record a book result and launch the next one."""
+        folder = self.batch_folders[self.batch_index]
+        folder_name = os.path.basename(os.path.normpath(folder))
+        if success:
+            self.batch_success += 1
+            self.log_output.append(f"✓ [{folder_name} {self.batch_index + 1}/{self.batch_total}] completed → {output_file}")
+        else:
+            self.log_output.append(f"✗ [{folder_name} {self.batch_index + 1}/{self.batch_total}] FAILED")
+        self.run_batch_book(self.batch_index + 1)
+
+    def batch_finished(self):
+        """Finalize the whole batch with a summary."""
+        if hasattr(self, 'timer'):
+            self.timer.stop()
+
+        self.set_conversion_controls(True)
+
+        msg = f"{self.batch_success} of {self.batch_total} books completed successfully"
+        self.status_bar.showMessage(msg)
+        QMessageBox.information(self, "Batch Complete", msg)
+
+    def create_config_from_gui(self, input_dir=None, batch=False):
+        """Create Config object from GUI values.
+
+        For batch mode pass the per-folder `input_dir`; the Metadata-tab fields
+        are ignored and each folder derives its own metadata via the converter.
+        """
         config = Config()
 
-        # Input/Output
-        config.input_dir = self.source_edit.text()
+        if batch:
+            # Batch mode: per-folder input/output; Metadata-tab fields ignored.
+            config.batch = True
+            config.input_dir = input_dir
+            config.output_dir = os.path.join(input_dir, "m4b")
+            config.output_pattern = self.pattern_edit_batch.text() or "{title}"
+            config.overwrite = self.overwrite_check.isChecked()
+            config.recursive = self.recursive_check.isChecked()
+            config.pattern = self.pattern_edit.text()
+            config.exclude = self.exclude_edit.text() or None
 
-        # Metadata
-        config.title = self.title_edit.text().strip() or None
-        config.author = self.author_edit.text().strip() or None
-        config.year = self.year_spin.value() or None
-        config.genre = self.genre_edit.text().strip() or None
-        config.comment = self.comment_edit.text().strip() or None
-        config.track_number = self.track_spin.value()
-        config.sort_name = self.sort_name_edit.text().strip() or None
-        config.media_type = self.media_type_spin.value()
-        config.album = self.album_edit.text().strip() or None
-        config.output_dir = self.dest_edit.text()
-        config.output_name = self.filename_edit.text() or None
-        config.overwrite = self.overwrite_check.isChecked()
+            # Leave book-metadata fields empty so the converter auto-detects &
+            # applies folder-name defaults per book.
+            config.title = None
+            config.author = None
+            config.year = None
+            config.genre = None
+            config.comment = None
+            config.track_number = None
+            config.sort_name = None
+            config.media_type = None
+            config.album = None
+            config.chapter_file = None
+            config.chapter_format = None
 
-        # Audio settings
+            # Cover art: always auto-detect per folder unless "No cover"
+            config.cover_file = None
+            config.no_cover = self.no_cover_check.isChecked()
+        else:
+            # Single-book mode (unchanged behavior)
+            config.input_dir = self.source_edit.text()
+
+            # Metadata
+            config.title = self.title_edit.text().strip() or None
+            config.author = self.author_edit.text().strip() or None
+            config.year = self.year_spin.value() or None
+            config.genre = self.genre_edit.text().strip() or None
+            config.comment = self.comment_edit.text().strip() or None
+            config.track_number = self.track_spin.value()
+            config.sort_name = self.sort_name_edit.text().strip() or None
+            config.media_type = self.media_type_spin.value()
+            config.album = self.album_edit.text().strip() or None
+            config.output_dir = self.dest_edit.text()
+            config.output_name = self.filename_edit.text() or None
+            config.overwrite = self.overwrite_check.isChecked()
+
+            # Chapter metadata - use edited metadata if available
+            if self.current_metadata:
+                # Save current metadata to a temporary file
+                import tempfile
+                temp_dir = tempfile.mkdtemp()
+                temp_chapter_file = os.path.join(temp_dir, "edited_chapters.txt")
+
+                try:
+                    # Export edited metadata to ffmetadata format
+                    chapter_parser.export_ffmetadata(self.current_metadata, temp_chapter_file)
+                    config.chapter_file = temp_chapter_file
+                    config.chapter_format = 'ffmetadata'
+
+                    # Store temp directory for cleanup
+                    config._temp_chapter_dir = temp_dir
+                except Exception as e:
+                    print(f"Warning: Could not save edited chapters: {e}")
+                    # Fall back to original chapter file
+                    if self.chapter_file_edit.text():
+                        config.chapter_file = self.chapter_file_edit.text()
+            elif self.chapter_file_edit.text():
+                config.chapter_file = self.chapter_file_edit.text()
+
+            # Cover image
+            config.cover_file = self.cover_edit.text() if not self.no_cover_check.isChecked() else None
+            config.no_cover = self.no_cover_check.isChecked()
+
+            # Batch processing (flag kept for bookkeeping)
+            config.recursive = self.recursive_check.isChecked()
+            config.pattern = self.pattern_edit.text()
+            config.exclude = self.exclude_edit.text() or None
+
+        # Temp directory
+        if batch:
+            # Batch mode: never use the GUI/CLI temp dir (it points at the
+            # scanned root). Each book derives its own <input_dir>/tmp so temp
+            # files stay inside the audiobook being processed.
+            config.temp_dir = None
+        else:
+            config.temp_dir = self.temp_edit.text() or None
+
         if not self.bitrate_auto.isChecked():
             config.bitrate = self.bitrate_combo.currentText()
 
@@ -1402,55 +1667,11 @@ class ConverterMainWindow(QMainWindow):
         if sample_rate_text != "Source":
             config.sample_rate = int(sample_rate_text)
 
-        # Track Number, Sort Name, and Media Type metadata
-        if self.current_metadata:
-            self.current_metadata.track_number = self.track_spin.value()
-            self.current_metadata.sort_name = self.sort_name_edit.text().strip() or None
-            self.current_metadata.media_type = self.media_type_spin.value()
-
-        config.track_number = self.track_spin.value()
-        config.sort_name = self.sort_name_edit.text().strip() or None
-        config.media_type = self.media_type_spin.value()
-
         channels_text = self.channels_combo.currentText()
         if channels_text == "1 (Mono)":
             config.channels = 1
         elif channels_text == "2 (Stereo)":
             config.channels = 2
-
-        # Chapter metadata - use edited metadata if available
-        if self.current_metadata:
-            # Save current metadata to a temporary file
-            import tempfile
-            temp_dir = tempfile.mkdtemp()
-            temp_chapter_file = os.path.join(temp_dir, "edited_chapters.txt")
-
-            try:
-                # Export edited metadata to ffmetadata format
-                chapter_parser.export_ffmetadata(self.current_metadata, temp_chapter_file)
-                config.chapter_file = temp_chapter_file
-                config.chapter_format = 'ffmetadata'
-
-                # Store temp directory for cleanup
-                config._temp_chapter_dir = temp_dir
-            except Exception as e:
-                print(f"Warning: Could not save edited chapters: {e}")
-                # Fall back to original chapter file
-                if self.chapter_file_edit.text():
-                    config.chapter_file = self.chapter_file_edit.text()
-        elif self.chapter_file_edit.text():
-            config.chapter_file = self.chapter_file_edit.text()
-
-        # Book metadata - use edited values
-        config.title = self.title_edit.text().strip() or None
-        config.author = self.author_edit.text().strip() or None
-        config.year = self.year_spin.value() or None
-        config.genre = self.genre_edit.text().strip() or None
-        config.comment = self.comment_edit.text().strip() or None
-
-        # Cover image
-        config.cover_file = self.cover_edit.text() if not self.no_cover_check.isChecked() else None
-        config.no_cover = self.no_cover_check.isChecked()
 
         # Processing
         workers_value = self.workers_spin.value()
@@ -1463,7 +1684,6 @@ class ConverterMainWindow(QMainWindow):
         config.keep_temp = self.keep_temp_check.isChecked()
         config.force_reencode = self.force_reencode_check.isChecked()
 
-        config.temp_dir = self.temp_edit.text() or None
         config.max_retries = self.retry_spin.value()
 
         # FFmpeg paths
@@ -1478,16 +1698,32 @@ class ConverterMainWindow(QMainWindow):
         else:
             config.verbosity = Verbosity.NORMAL
 
-        # Batch processing
-        config.batch = self.batch_check.isChecked()
-        config.recursive = self.recursive_check.isChecked()
-        config.pattern = self.pattern_edit.text()
-        config.exclude = self.exclude_edit.text() or None
-
         return config
 
     def validate_inputs(self):
         """Validate user inputs before conversion"""
+        # Batch mode validates the selected folders (not the Input-tab source).
+        if self.using_batch_mode():
+            source_dir = self.source_edit.text()
+            if not source_dir or not Path(source_dir).exists():
+                QMessageBox.warning(self, "Warning",
+                                    "Please select a valid source directory and scan subdirectories first.")
+                return False
+            if not self.get_selected_batch_folders():
+                QMessageBox.warning(self, "Warning", "No directories selected.\nScan subdirectories and select at least one.")
+                return False
+
+            # Per-folder output directories are derived (<folder>/m4b); verify they
+            # can be created for the selected folders.
+            for folder in self.get_selected_batch_folders():
+                try:
+                    Path(folder, "m4b").mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    QMessageBox.warning(self, "Warning", f"Cannot create output directory for:\n{folder}")
+                    return False
+            return True
+
+        # Single-book validation (unchanged)
         # Check source directory
         source_dir = self.source_edit.text()
         if not source_dir:

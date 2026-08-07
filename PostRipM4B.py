@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.2.1"
+VERSION = "1.3"
 
 # Optional imports for audio metadata
 try:
@@ -134,6 +134,7 @@ class Config:
     input_dir: str = field(default_factory=lambda: os.getcwd())
     output_dir: str = field(default_factory=lambda: "")  # Will be set by parse_args
     output_name: Optional[str] = None
+    output_pattern: Optional[str] = None  # e.g. "{title} by {author}" (expanded from metadata)
     overwrite: bool = False
 
     # Audio Settings
@@ -283,6 +284,9 @@ class Config:
 
         if hasattr(args, 'output_name'):
             config.output_name = args.output_name
+
+        if hasattr(args, 'output_pattern') and args.output_pattern:
+            config.output_pattern = args.output_pattern
 
         if hasattr(args, 'overwrite'):
             config.overwrite = args.overwrite
@@ -820,17 +824,11 @@ class AudioBookConverter:
         # Fallback to old auto-detection for backward compatibility
         metadata_file = self.config.metadata_file
         if not metadata_file:
-            # Auto-detect metadata file
-            metadata_json = os.path.join(self.config.input_dir, "metadata", "metadata.json")
-            if os.path.exists(metadata_json):
-                metadata_file = metadata_json
-                self.config.chapter_format = 'libby'
-            else:
-                # Look for metadata.txt in input directory
-                metadata_txt = os.path.join(self.config.input_dir, "metadata.txt")
-                if os.path.exists(metadata_txt):
-                    metadata_file = metadata_txt
-                    self.config.chapter_format = 'ffmetadata'
+            # Auto-detect metadata file inside the input folder
+            metadata_file, detected_format = self._detect_metadata_file()
+            if metadata_file:
+                self.config.metadata_file = metadata_file
+                self.config.chapter_format = detected_format
 
         if metadata_file and os.path.exists(metadata_file):
             try:
@@ -856,6 +854,9 @@ class AudioBookConverter:
                     album=self.config.album or metadata.album
                 )
 
+                if self.config.batch:
+                    metadata = self._apply_batch_folder_defaults(metadata)
+
                 self.progress.step_end(True, f"'{metadata.title}' by {metadata.author or 'Unknown'}")
                 return metadata
 
@@ -874,7 +875,7 @@ class AudioBookConverter:
         self.progress.step_end(True, f"Using generated metadata: '{title}'")
 
         # Create minimal metadata with empty chapters
-        return chapter_parser.Metadata(
+        metadata = chapter_parser.Metadata(
             title=title,
             author=self.config.author,
             narrator=None,
@@ -888,6 +889,67 @@ class AudioBookConverter:
             media_type=self.config.media_type,
             album=self.config.album or title
         )
+
+        if self.config.batch:
+            metadata = self._apply_batch_folder_defaults(metadata)
+
+        return metadata
+
+    def _detect_metadata_file(self) -> Tuple[Optional[str], Optional[str]]:
+        """Locate a chapter/metadata file inside the input folder.
+
+        Returns (path, format) with format possibly None for auto-detection.
+        Mirrors the "Auto-detect (from file extension)" behavior used by the GUI.
+        """
+        ignore_dirs = {"tmp", "m4b"}
+
+        def is_supported(path):
+            return os.path.exists(path) and not os.path.isdir(path) and os.path.basename(os.path.dirname(path)) not in ignore_dirs
+
+        candidates = [
+            os.path.join(self.config.input_dir, "metadata", "metadata.json"),
+            os.path.join(self.config.input_dir, "metadata.txt"),
+            os.path.join(self.config.input_dir, "chapters.txt"),
+        ]
+
+        # Also probe any {folder}/metadata/*.json or *.txt
+        metadata_dir = os.path.join(self.config.input_dir, "metadata")
+        if os.path.isdir(metadata_dir):
+            for f in sorted(os.listdir(metadata_dir)):
+                if f.lower().endswith((".json", ".txt")):
+                    candidates.append(os.path.join(metadata_dir, f))
+
+        for path in candidates:
+            if not is_supported(path):
+                continue
+            fmt = chapter_parser.detect_chapter_format(path)
+            if fmt is None:
+                fmt = "libby" if path.lower().endswith(".json") else "ffmetadata"
+            return path, fmt
+
+        return None, None
+
+    def _apply_batch_folder_defaults(self, metadata: chapter_parser.Metadata) -> chapter_parser.Metadata:
+        """Fill missing metadata fields with folder-name defaults (batch mode).
+
+        Title / Album / Sort Name default to the folder name, Track = 1,
+        Media Type = 2.
+        """
+        folder_name = os.path.basename(os.path.normpath(self.config.input_dir))
+        if not folder_name or folder_name == ".":
+            folder_name = "Unknown Title"
+
+        if not metadata.title or not metadata.title.strip():
+            metadata.title = folder_name
+        if not metadata.album:
+            metadata.album = folder_name
+        if not metadata.sort_name:
+            metadata.sort_name = metadata.title
+        if metadata.track_number is None:
+            metadata.track_number = 1
+        if metadata.media_type is None:
+            metadata.media_type = 2
+        return metadata
 
     def _find_mp3_files(self) -> List[str]:
         """Find MP3 files in input directory"""
@@ -1250,6 +1312,31 @@ class AudioBookConverter:
         """Determine output filename"""
         if self.config.output_name:
             filename = self.config.output_name
+        elif self.config.output_pattern:
+            # Expand {title}/{author}/{year} placeholders from resolved metadata.
+            # A placeholder with no usable value falls back to the title.
+            folder_name = os.path.basename(os.path.normpath(self.config.input_dir))
+            title = metadata.title or self.config.title or folder_name or "audiobook"
+            title = title.strip()
+            if not title or title == ".":
+                title = "audiobook"
+
+            def _expand_value(value):
+                value = value if value and str(value).strip() else None
+                return value if value is not None else title
+
+            author = _expand_value(self.config.author or metadata.author)
+            year = _expand_value(metadata.year if metadata.year is not None else self.config.year)
+
+            filename = self.config.output_pattern
+            filename = filename.replace("{title}", title)
+            filename = filename.replace("{author}", author if author not in (None,) else title)
+            filename = filename.replace("{year}", str(year) if year is not None else title)
+
+            if not filename or not filename.strip():
+                filename = title
+
+            filename = re.sub(r'[\\/*?:"<>|]', "_", filename).strip()
         else:
             # Create safe filename from title
             title = self.config.title or metadata.title
@@ -1522,8 +1609,19 @@ def launch_gui(args):
 
         # Create application
         app = QApplication(sys.argv)
-        app.setApplicationName("MP3 to M4B Converter")
+        app.setApplicationName("PostRipM4B")
+        app.setApplicationDisplayName("PostRipM4B Audiobook Converter")
         app.setOrganizationName("AudiobookTools")
+        app.setDesktopFileName("postrip-m4b")
+
+        # Apply the application icon so the taskbar/launcher can use it
+        try:
+            from PyQt5.QtGui import QIcon
+            icon_path = os.path.join(current_dir, 'assets', 'icon.png')
+            if os.path.exists(icon_path):
+                app.setWindowIcon(QIcon(icon_path))
+        except Exception:
+            pass
 
         # Create and show main window
         window = ConverterMainWindow(args)
@@ -1581,6 +1679,11 @@ Examples:
     parser.add_argument(
         "-n", "--output-name",
         help="Output filename (without extension, defaults to book title)"
+    )
+    parser.add_argument(
+        "--output-pattern",
+        default="{title}",
+        help="Output filename pattern with placeholders {title}/{author}/{year} (default: {title})"
     )
     parser.add_argument(
         "--overwrite",
@@ -1848,6 +1951,121 @@ Examples:
 
     return args
 
+def _collect_batch_folders(config: Config) -> List[str]:
+    """Return immediate subdirectories of config.input_dir that contain MP3 files."""
+    import fnmatch as _fnmatch
+
+    base = config.input_dir
+    if not os.path.isdir(base):
+        return []
+
+    pattern = config.pattern or "*.mp3"
+
+    def _has_mp3(folder: str) -> bool:
+        try:
+            return any(
+                _fnmatch.fnmatch(f, pattern) for f in os.listdir(folder)
+            )
+        except OSError:
+            return False
+
+    subdirs = []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return []
+
+    for entry in entries:
+        full = os.path.join(base, entry)
+        if os.path.isdir(full) and _has_mp3(full):
+            subdirs.append(full)
+
+    return subdirs
+
+
+def _build_batch_config(base_config: Config, folder: str, output_pattern: Optional[str]) -> Config:
+    """Build a fresh, isolated per-folder Config for CLI batch mode.
+
+    Copies all audio/advanced/processing settings from the base config but
+    intentionally does NOT copy singular-book metadata flags (title/album/
+    author/track/media/etc.) — each folder derives its own metadata.
+    """
+    cfg = Config()
+
+    # Input/Output
+    cfg.input_dir = folder
+    # Per-folder output: <folder>/m4b (any --output-dir is ignored in batch mode)
+    cfg.output_dir = os.path.join(folder, "m4b")
+    cfg.output_pattern = output_pattern or "{title}"
+    cfg.overwrite = base_config.overwrite
+
+    # Audio settings
+    cfg.bitrate = base_config.bitrate
+    cfg.sample_rate = base_config.sample_rate
+    cfg.channels = base_config.channels
+
+    # Processing
+    cfg.workers = base_config.workers
+    cfg.no_optimize = base_config.no_optimize
+    cfg.keep_temp = base_config.keep_temp
+    cfg.max_retries = base_config.max_retries
+
+    # Output control
+    cfg.verbosity = base_config.verbosity
+    cfg.style = base_config.style
+    cfg.log_file = base_config.log_file
+
+    # File scanning (applies to every book)
+    cfg.recursive = base_config.recursive
+    cfg.pattern = base_config.pattern
+    cfg.exclude = base_config.exclude
+
+    # Advanced
+    cfg.ffmpeg_path = base_config.ffmpeg_path
+    cfg.ffprobe_path = base_config.ffprobe_path
+    cfg.force_reencode = base_config.force_reencode
+
+    # Cover art: auto-detect per folder unless no_cover
+    cfg.no_cover = base_config.no_cover
+    cfg.cover_file = None
+
+    # Batch marker
+    cfg.batch = True
+
+    # NOTE: metadata intentionally left empty (title/author/album/... = None)
+    # so _load_metadata performs per-folder detection with folder-name defaults.
+    return cfg
+
+
+def _run_cli_batch(config: Config) -> bool:
+    """Run a full conversion for every subdirectory (CLI --batch)."""
+    total_success = 0
+    folders = _collect_batch_folders(config)
+    output_pattern = config.output_pattern
+
+    if not folders:
+        print(f"Error: No subdirectories with matching files found in: {config.input_dir}")
+        return False
+
+    total = len(folders)
+    print(f"Batch mode: processing {total} subdirectories.")
+
+    for i, folder in enumerate(folders, 1):
+        name = os.path.basename(os.path.normpath(folder))
+        cfg = _build_batch_config(config, folder, output_pattern)
+        print(f"\n[{name} {i}/{total}] Starting conversion of: {folder}")
+        converter = AudioBookConverter(cfg)
+        ok = converter.run()
+        if ok:
+            total_success += 1
+            print(f"[{name} {i}/{total}] SUCCESS: {converter.output_file}")
+        else:
+            print(f"[{name} {i}/{total}] FAILED")
+
+    print(f"\nBatch complete: {total_success} of {total} books completed successfully.")
+    return total_success > 0
+
+
 # -----------------------------
 # Main Entry Point
 # -----------------------------
@@ -1867,6 +2085,12 @@ def main():
 
     # Otherwise, run CLI version
     config = Config.from_args(args)
+
+    # Batch mode: loop over subdirectories, each as its own audiobook
+    if config.batch:
+        success = _run_cli_batch(config)
+        sys.exit(0 if success else 1)
+
     converter = AudioBookConverter(config)
     success = converter.run()
 

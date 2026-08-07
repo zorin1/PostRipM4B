@@ -25,6 +25,36 @@ BASE_SIZE_192K = 850  # MB for 192k AAC
 # Expected chapter count from your metadata
 EXPECTED_CHAPTERS = 4  # Update this based on your metadata.json
 
+# Batch-mode test data: a parent folder whose immediate subfolders are each a
+# separate LibbyRip audiobook (each with its own MP3s + metadata).
+# These live under ~/Music. If they are missing the batch tests are skipped.
+BATCH_TEST_DIR = Path.home() / "Music" / "TestBatchBooks"
+BATCH_BOOKS = [
+    {
+        "title": "Real Tigers",
+        "author": "Mick Herron",
+        "folder": "Mick Herron - Real Tigers",
+        "has_metadata": True,
+        "chapters": 4,
+    },
+    {
+        "title": "Standing by the Wall",
+        "author": "Mick Herron",
+        "folder": "Mick Herron - Standing by the Wall",
+        "has_metadata": True,
+        "chapters": 6,
+    },
+    {
+        # No metadata/metadata.json inside this folder: the converter must fall
+        # back to the directory name for Title/Album/Sort Name (+ Track=1/Media=2).
+        "title": "No Metadata Book",
+        "author": None,
+        "folder": "No Metadata Book",
+        "has_metadata": False,
+        "chapters": 0,
+    },
+]
+
 def parse_test_output_from_args(test_name, cmd_args):
     """
     Parse cmd_args to find:
@@ -283,6 +313,206 @@ def run_test(test_name, cmd_args, expected_size_range=None, expected_chapters=No
         'cmd': ' '.join(cmd)
     }
 
+def probe_m4b_tags(m4b_path):
+    """Read the metadata tags of an M4B file via ffprobe (dict of lowercase keys)."""
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+               "-show_entries", "format_tags", str(m4b_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            return {}
+        data = json.loads(res.stdout)
+        tags = data.get("format", {}).get("tags", {}) or {}
+        return {str(k).lower(): str(v) for k, v in tags.items()}
+    except Exception:
+        return {}
+
+def probe_m4b_details(m4b_path):
+    """Probe an M4B for container/codec/chapter info via ffprobe."""
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+               "-show_format", "-show_streams", "-show_chapters", str(m4b_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            return {}
+        data = json.loads(res.stdout)
+        fmt = data.get("format", {}) or {}
+        streams = data.get("streams", []) or []
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), {})
+        return {
+            "format_name": fmt.get("format_name", ""),
+            "audio_codec": audio.get("codec_name", ""),
+            "chapters": len(data.get("chapters") or []),
+        }
+    except Exception:
+        return {}
+
+def run_output_pattern_test():
+    """Test the new --output-pattern flag (single-book mode)."""
+    name = "Test_Output_Pattern"
+    book = BATCH_BOOKS[0]
+    src = BATCH_TEST_DIR / book["folder"]
+    result = {
+        'name': name,
+        'success': False,
+        'file_exists': False,
+        'elapsed': 0,
+        'file_info': {},
+        'size_ok': True,
+        'chapters_ok': True,
+        'chapter_count': 0,
+        'cmd': None,
+        'skipped': False,
+    }
+
+    if not src.exists():
+        print(f"  ⚠ Batch test data not found ({src}); skipping {name}")
+        result['skipped'] = True
+        result['success'] = True
+        return result
+
+    expected_name = f"{book['title']} by {book['author']}.m4b"
+    out_dir = src / "m4b"
+    expected_file = out_dir / expected_name
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+
+    cmd_args = ["--quiet", "--output-pattern", "{title} by {author}"]
+
+    print(f"\n{'='*60}")
+    print(f"TEST: {name}")
+    print(f"CMD: {CONVERTER_SCRIPT} {src} {' '.join(cmd_args)}")
+    print('='*60)
+
+    start_time = time.time()
+    cmd = [str(CONVERTER_SCRIPT), str(src)] + cmd_args
+    result_cmd = str(CONVERTER_SCRIPT) + " " + " ".join([str(src)] + cmd_args)
+    result['cmd'] = result_cmd
+    sub = subprocess.run(cmd, capture_output=True, text=True)
+    result['elapsed'] = time.time() - start_time
+
+    result['success'] = sub.returncode == 0 and expected_file.exists()
+    result['file_exists'] = expected_file.exists()
+    if expected_file.exists():
+        result['file_info']['size_mb'] = round(expected_file.stat().st_size / (1024 * 1024), 2)
+
+    status = "✓ PASS" if result['success'] else "✗ FAIL"
+    print(f"\nRESULT: {status}")
+    print(f"Time: {result['elapsed']:.1f}s")
+    print(f"Expected file: {expected_file}")
+    print(f"File exists: {result['file_exists']}")
+    if sub.stderr and sub.returncode != 0:
+        print(f"\nERROR OUTPUT:\n{sub.stderr[:500]}...")
+
+    return result
+
+def run_batch_test(batch_dir=BATCH_TEST_DIR):
+    """Verify CLI --batch converts every subfolder as its own audiobook."""
+    name = "Test_Batch"
+    result = {
+        'name': name,
+        'success': False,
+        'file_exists': False,
+        'elapsed': 0,
+        'file_info': {},
+        'size_ok': True,
+        'chapters_ok': True,
+        'chapter_count': 0,
+        'cmd': None,
+        'skipped': False,
+    }
+
+    if not batch_dir.exists() or not any((batch_dir / b["folder"]).exists() for b in BATCH_BOOKS):
+        print(f"  Skipped batch test - batch directory not found: {batch_dir}")
+        result['skipped'] = True
+        result['success'] = True
+        return result
+
+    # Fresh outputs: each book writes to its own <folder>/m4b
+    for b in BATCH_BOOKS:
+        out = batch_dir / b["folder"] / "m4b"
+        if out.exists():
+            shutil.rmtree(out)
+
+    cmd_args = ["--batch", "--quiet"]
+    print(f"\n{'='*60}")
+    print(f"TEST: {name}")
+    print(f"CMD: {CONVERTER_SCRIPT} {batch_dir} {' '.join(cmd_args)}")
+    print('='*60)
+
+    start_time = time.time()
+    cmd = [str(CONVERTER_SCRIPT), str(batch_dir)] + cmd_args
+    result['cmd'] = " ".join(str(a) for a in cmd)
+    sub = subprocess.run(cmd, capture_output=True, text=True)
+    result['elapsed'] = time.time() - start_time
+
+    # Verify each book produced exactly one .m4b in its own <folder>/m4b
+    all_books_ok = True
+    total_size = 0.0
+    found = 0
+    for b in BATCH_BOOKS:
+        out = batch_dir / b["folder"] / "m4b"
+        files = sorted(out.glob("*.m4b")) if out.exists() else []
+        ok = len(files) >= 1
+        all_books_ok = all_books_ok and ok
+        if ok:
+            found += 1
+            total_size += files[0].stat().st_size / (1024 * 1024)
+            print(f"  ✓ {b['title']}: {files[0].name} ({len(files)} file(s))")
+
+            # Output-format validity: must be an MP4/M4A container with AAC audio.
+            details = probe_m4b_details(files[0])
+            is_valid_m4b = (
+                "mp4" in details.get("format_name", "").lower() or
+                "m4a" in details.get("format_name", "").lower()
+            ) and details.get("audio_codec", "").lower() == "aac"
+            chapters_match = details.get("chapters") == b.get("chapters")
+            all_books_ok = all_books_ok and is_valid_m4b and chapters_match
+            print(f"      format={details.get('format_name')!r} "
+                  f"codec={details.get('audio_codec')!r} chapters={details.get('chapters')} "
+                  f"(expected {b.get('chapters')}) -> "
+                  f"{'✓' if is_valid_m4b and chapters_match else '✗'}")
+
+            # For a book with no metadata file, verify the folder-name fallback:
+            # Title/Album/Sort Name == directory name, Track == 1, Media Type == 2.
+            if not b.get("has_metadata", True):
+                tags = probe_m4b_tags(files[0])
+                expected = b["title"]
+                checks = {
+                    "title": tags.get("title"),
+                    "album": tags.get("album"),
+                    "sort_name": (tags.get("sort_name") or tags.get("sortname") or tags.get("sonm")),
+                    "track": (tags.get("track") or "").split("/")[0] if tags.get("track") else None,
+                    "media_type": tags.get("media_type"),
+                }
+                expected_track = "1"
+                expected_media = "2"
+                fallback_ok = (checks["title"] == expected and
+                               checks["sort_name"] == expected and
+                               checks["track"] == expected_track and
+                               checks["media_type"] == expected_media)
+                all_books_ok = all_books_ok and fallback_ok
+                print(f"      folder-name fallback tags: title={checks['title']!r} "
+                      f"album={checks['album']!r} sort={checks['sort_name']!r} "
+                      f"track={checks['track']!r} media_type={checks['media_type']!r} "
+                      f"-> {'✓' if fallback_ok else '✗'}")
+        else:
+            print(f"  ✗ {b['title']}: no .m4b in {out}")
+
+    result['success'] = sub.returncode == 0 and all_books_ok
+    result['file_exists'] = all_books_ok
+    result['file_info']['size_mb'] = round(total_size, 2)
+
+    status = "✓ PASS" if result['success'] else "✗ FAIL"
+    print(f"\nRESULT: {status} (expected {len(BATCH_BOOKS)} books)")
+    print(f"Time: {result['elapsed']:.1f}s")
+    print(f"Books with output: {found}/{len(BATCH_BOOKS)}")
+    if sub.stderr and sub.returncode != 0:
+        print(f"\nERROR OUTPUT:\n{sub.stderr[:500]}...")
+
+    return result
+
 def main():
     # Change to test directory
     test_dir = os.path.expanduser(input("Enter music directory [default: ~/Music]: ").strip() or "~/Music") 
@@ -465,6 +695,12 @@ def main():
         expected_chapters=EXPECTED_CHAPTERS
     ))
 
+    # Test 11: New --output-pattern flag (v1.3)
+    all_results.append(run_output_pattern_test())
+
+    # Test 12: Batch mode (v1.3) - convert every subfolder as its own book
+    all_results.append(run_batch_test())
+
     # Print summary
     print("\n" + "="*60)
     print("TEST SUMMARY")
@@ -472,10 +708,12 @@ def main():
 
     passed = sum(1 for r in all_results if r['success'])
     total = len(all_results)
+    skipped = sum(1 for r in all_results if r.get('skipped'))
 
     print(f"\nTotal Tests: {total}")
     print(f"Passed: {passed}")
     print(f"Failed: {total - passed}")
+    print(f"Skipped (batch data not present): {skipped}")
     print(f"Success Rate: {(passed/total*100):.1f}%")
 
     print("\n" + "="*60)

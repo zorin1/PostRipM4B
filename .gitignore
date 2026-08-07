@@ -2,6 +2,7 @@
 Tested/
 
 # Python
+squashfs-root/
 __pycache__/
 *.py[cod]
 *$py.class

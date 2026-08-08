@@ -333,6 +333,14 @@ For issues, questions, or feature requests:
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
 
+## Version 1.3.1
+
+This release fixes output filename handling and improves recursive file discovery for books that span multiple folders.
+
+- **Blank placeholders in output patterns**: `{author}` and `{year}` now expand to blank when the value is missing (e.g. `{title}-{year}` with no year gives `title-.m4b` instead of `title-title.m4b`). `{title}` still falls back to the folder name.
+- **Recursive batch scanning**: the Batch tab's *Scan Subdirectories* (and CLI `--batch`) now search subdirectories recursively, so nested book folders like `Album1/Album2` are detected even when the audio lives one or more levels deep.
+- **Correct file ordering for multi-directory books**: when *Search subdirectories for MP3 files* is enabled, files are now sorted by full path rather than filename alone, so books laid out as `CD1`, `CD2`, `CD3` are assembled in the right order instead of being interleaved.
+
 ## Version 1.3
 
 This release makes **batch processing fully functional** in both the GUI and the CLI.

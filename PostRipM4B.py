@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.3"
+VERSION = "1.3.1"
 
 # Optional imports for audio metadata
 try:
@@ -969,9 +969,10 @@ class AudioBookConverter:
                 if fnmatch.fnmatch(file, self.config.pattern):
                     mp3_files.append(os.path.join(self.config.input_dir, file))
 
-        # Sort files naturally
+        # Sort files naturally by path (directory first, then filename) so that
+        # multi-directory books like CD1/CD2/CD3 keep their logical order.
         mp3_files.sort(key=lambda x: [int(t) if t.isdigit() else t.lower()
-                                     for t in re.split(r'(\d+)', os.path.basename(x))])
+                                     for t in re.split(r'(\d+)', os.path.relpath(x, self.config.input_dir))])
 
         if not mp3_files:
             self.progress.step_end(False)
@@ -1314,7 +1315,7 @@ class AudioBookConverter:
             filename = self.config.output_name
         elif self.config.output_pattern:
             # Expand {title}/{author}/{year} placeholders from resolved metadata.
-            # A placeholder with no usable value falls back to the title.
+            # A placeholder with no usable value is left blank.
             folder_name = os.path.basename(os.path.normpath(self.config.input_dir))
             title = metadata.title or self.config.title or folder_name or "audiobook"
             title = title.strip()
@@ -1323,15 +1324,15 @@ class AudioBookConverter:
 
             def _expand_value(value):
                 value = value if value and str(value).strip() else None
-                return value if value is not None else title
+                return value
 
             author = _expand_value(self.config.author or metadata.author)
             year = _expand_value(metadata.year if metadata.year is not None else self.config.year)
 
             filename = self.config.output_pattern
             filename = filename.replace("{title}", title)
-            filename = filename.replace("{author}", author if author not in (None,) else title)
-            filename = filename.replace("{year}", str(year) if year is not None else title)
+            filename = filename.replace("{author}", author or "")
+            filename = filename.replace("{year}", str(year) if year is not None else "")
 
             if not filename or not filename.strip():
                 filename = title
@@ -1952,7 +1953,7 @@ Examples:
     return args
 
 def _collect_batch_folders(config: Config) -> List[str]:
-    """Return immediate subdirectories of config.input_dir that contain MP3 files."""
+    """Return subdirectories (recursively) of config.input_dir that contain MP3 files."""
     import fnmatch as _fnmatch
 
     base = config.input_dir
@@ -1970,16 +1971,13 @@ def _collect_batch_folders(config: Config) -> List[str]:
             return False
 
     subdirs = []
-    try:
-        entries = sorted(os.listdir(base))
-    except OSError:
-        return []
+    for root, dirs, files in os.walk(base):
+        if root == base:
+            continue
+        if _has_mp3(root):
+            subdirs.append(root)
 
-    for entry in entries:
-        full = os.path.join(base, entry)
-        if os.path.isdir(full) and _has_mp3(full):
-            subdirs.append(full)
-
+    subdirs.sort()
     return subdirs
 
 

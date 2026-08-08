@@ -999,20 +999,26 @@ class ConverterMainWindow(QMainWindow):
         pattern = self.pattern_edit.text() or "*.mp3"
         import fnmatch
 
-        for item in source_path.iterdir():
-            if item.is_dir():
-                # Check if directory contains files matching the Input-tab pattern
-                try:
-                    mp3_files = [f for f in item.iterdir()
-                                 if f.is_file() and fnmatch.fnmatch(f.name, pattern)]
-                except OSError:
-                    continue
-                if mp3_files:
-                    item_text = f"{item.name} ({len(mp3_files)} MP3 files)"
-                    list_item = QListWidgetItem(item_text)
-                    list_item.setData(Qt.UserRole, str(item))
-                    list_item.setCheckState(Qt.Checked)
-                    self.batch_list.addItem(list_item)
+        found = []
+        for root, dirs, files in os.walk(source_path):
+            root_path = Path(root)
+            if root_path == source_path:
+                continue
+            # Check if this directory contains files matching the Input-tab pattern
+            try:
+                mp3_files = [f for f in root_path.iterdir()
+                             if f.is_file() and fnmatch.fnmatch(f.name, pattern)]
+            except OSError:
+                continue
+            if mp3_files:
+                found.append((root_path, len(mp3_files)))
+
+        for root_path, count in sorted(found, key=lambda x: str(x[0])):
+            item_text = f"{root_path.relative_to(source_path)} ({count} MP3 files)"
+            list_item = QListWidgetItem(item_text)
+            list_item.setData(Qt.UserRole, str(root_path))
+            list_item.setCheckState(Qt.Checked)
+            self.batch_list.addItem(list_item)
 
     def select_all_batch(self):
         """Select (check) every batch entry."""

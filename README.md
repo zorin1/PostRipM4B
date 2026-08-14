@@ -181,10 +181,13 @@ python PostRipM4b.py /path/to/extracted/audiobook
 - `--cover`: Path to cover image (default: auto-detect)
 - `--no-cover`: Don't embed cover image even if available
 
-### Book Metadata (overrides chapter file metadata)
-- `--title`: Override book title
-- `--author`: Override author
-- `--year`: Set release year (default: current year)
+### Book Metadata (fills in missing metadata from chapter file)
+
+Values from the metadata/chapter file take precedence. Command-line values (and GUI entries) are used only when the metadata file does not provide a value for that field.
+- `--title`: Book title (falls back to the input directory name when neither the metadata file nor `--title` provides one)
+- `--author`: Author
+- `--narrator`: Narrator (written to the M4B when present)
+- `--year`: Set release year (empty/omitted when not provided, from metadata file, or entered in the GUI)
 - `--genre`: Set genre
 - `--comment`: Add comment/description
 - `--track-num`: Track number (default: 1)
@@ -192,7 +195,7 @@ python PostRipM4b.py /path/to/extracted/audiobook
 - `--media-type`: iTunes media type (default: 2)
 - `--album`: Album tag (default: value of `--title` if provided, otherwise from metadata file)
 
-**Title-based defaults:** When `--title` is provided and `--album` or `--sort-name` are not explicitly set, both `album` and `sort_name` are automatically populated with the title value. If `--album` or `--sort-name` are explicitly provided, those values take precedence. This same behavior applies in GUI mode — loading metadata will populate Sort Name and Album from the title if those fields are not already set in the source metadata.
+**Title-based defaults:** The title is resolved in this order: metadata file → `--title` → input directory name. When a title is resolved and `--album`/`sort_name` are not provided by the metadata file, both `album` and `sort_name` are automatically populated with the title value. Explicit values from the metadata file take precedence. This same behavior applies in GUI mode — loading metadata will populate Sort Name and Album from the title if those fields are not already set in the source metadata.
 
 ### Processing
 - `-w, --workers`: Number of parallel workers (default: auto-detect)
@@ -333,12 +336,32 @@ For issues, questions, or feature requests:
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
 
+## Version 1.4
+
+This release fixes batch processing and subdirectory scanning for audiobooks that span multiple folders or discs.
+
+- **One-level subdirectory scanning**: "Search subdirectories for MP3 files" (GUI Input tab / CLI `--recursive`) scans the book folder plus its immediate subdirectories — exactly the layout of a multi-CD book like `multiple/CD01`, `multiple/CD02`. Deeper nesting is intentionally not searched. Single-book validation uses the same scan, so a book whose MP3s live in subdirectories is no longer rejected with "No MP3 files found".
+- **Batch finds books at any depth**: batch scanning (GUI *Scan Subdirectories* and CLI `--batch --recursive`) walks the whole source tree and lists every audiobook it finds — for example, pointing it at `~/Music` lists `Harry Potter/Book1`, `Harry Potter/Book2`, `Harry Potter/Book3`, even though the books sit below a series folder. A folder whose audio lives in its immediate subdirectories (e.g. `Book2/CD01`, `Book2/CD02`) is treated as ONE book. Container folders (like `Harry Potter` itself) are not listed as books. The disc subdirectories of a multi-CD book are still shown in the GUI, unchecked, so you can convert a single disc on its own. When subdirectory search is off, only the source's immediate subfolders that directly contain audio are listed.
+
+## Version 1.3.2
+
+This release stops writing a bogus year tag and adds full narrator support.
+
+- **Year is no longer forced to the current year**: previously the release year defaulted to today's date and was always written as a `date` tag — even when the year was unknown, and it silently overwrote a year present in the metadata file. Now the year is only written to the M4B when it's explicitly provided: via `--year`, in a metadata file, or entered in the GUI. When it's missing, no `date` tag is written at all. The GUI's year field now defaults to "Not specified" instead of today's year.
+- **Narrator support added**: the narrator (e.g. from a Libby `metadata.json` `creator` entry with role `narrator`) is now written to the M4B instead of being silently discarded. Added a new `--narrator` CLI flag and a Narrator field in the GUI's Metadata tab. When no narrator is present, no narrator tag is written. Uses existing tags (`----:com.apple.iTunes:narrator` and `----:com.apple.iTunes:LYRICIST`) via mutagen.
+- **Metadata precedence now matches batch mode**: values from the metadata/chapter file take precedence over command-line values, which are used only to fill in fields the file doesn't provide. This keeps batch processing correct (each book uses its own file's metadata) and fixes CLI/GUI overrides being silently discarded in the GUI.
+- **GUI no longer carries stale metadata between books**: switching the source directory to a book with no metadata file now clears the previous book's values and shows the CLI/GUI defaults (e.g. `--narrator`) instead of the previous book's narrator/title/author.
+- **Chapter Information updates when switching books**: switching to a book with no metadata now clears the Chapter Information section and disables the Edit Chapters button instead of leaving the previous book's chapters on screen. Late MP3-analysis results from a previously selected book are ignored so they can't repopulate the display.
+- **Edit Chapters always available**: the Edit Chapters button is now always enabled, including for books with no metadata file — opening it builds chapters from the current fields so you can create and edit chapters from scratch. The editor no longer requires an author, so chapters can be used even when the author is unknown.
+- **Title falls back to the book's directory name**: the title is now resolved in the order metadata file → `--title` → the name of the directory containing the MP3 files (previously, chapter-only files like `chapters.txt` produced the file's name, e.g. "chapters", as the title). Album and Sort Name are still populated from the resolved title when not set, and the GUI now shows this folder-name fallback in the Title/Album/Sort Name fields instead of leaving them blank.
+- **Batch processing is always available**: the "Process all subdirectories" checkbox was removed — the Batch tab's *Scan Subdirectories* button and list are always enabled, and batch mode activates simply by checking folders in the list. CLI `--batch` now auto-populates the batch list when a source directory is set.
+
 ## Version 1.3.1
 
 This release fixes output filename handling and improves recursive file discovery for books that span multiple folders.
 
 - **Blank placeholders in output patterns**: `{author}` and `{year}` now expand to blank when the value is missing (e.g. `{title}-{year}` with no year gives `title-.m4b` instead of `title-title.m4b`). `{title}` still falls back to the folder name.
-- **Recursive batch scanning**: the Batch tab's *Scan Subdirectories* (and CLI `--batch`) now search subdirectories recursively, so nested book folders like `Album1/Album2` are detected even when the audio lives one or more levels deep.
+- **Recursive batch scanning**: the Batch tab's *Scan Subdirectories* (and CLI `--batch`) now search subdirectories recursively, so nested book folders like `Album1/Album2` are detected even when the audio lives one or more levels deep. (In 1.4 the search is refined to find books at any depth and group multi-CD folders into a single book.)
 - **Correct file ordering for multi-directory books**: when *Search subdirectories for MP3 files* is enabled, files are now sorted by full path rather than filename alone, so books laid out as `CD1`, `CD2`, `CD3` are assembled in the right order instead of being interleaved.
 
 ## Version 1.3

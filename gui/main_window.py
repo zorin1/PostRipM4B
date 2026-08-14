@@ -158,29 +158,15 @@ class MP3AnalyzerThread(QThread):
     def run(self):
         try:
             # Find MP3 files
-            import fnmatch
-            import os
+            from PostRipM4B import find_mp3_files
 
-            mp3_files = []
-
-            if self.recursive:
-                for root, dirs, files in os.walk(self.input_dir):
-                    for file in files:
-                        if fnmatch.fnmatch(file, self.pattern):
-                            mp3_files.append(os.path.join(root, file))
-            else:
-                for file in os.listdir(self.input_dir):
-                    if fnmatch.fnmatch(file, self.pattern):
-                        mp3_files.append(os.path.join(self.input_dir, file))
+            mp3_files = find_mp3_files(
+                self.input_dir, self.pattern, self.recursive
+            )
 
             if not mp3_files:
                 self.error_signal.emit(f"No MP3 files found in {self.input_dir}")
                 return
-
-            # Sort files naturally
-            import re
-            mp3_files.sort(key=lambda x: [int(t) if t.isdigit() else t.lower()
-                                         for t in re.split(r'(\d+)', os.path.basename(x))])
 
             self.progress_signal.emit(f"Found {len(mp3_files)} MP3 files")
 
@@ -232,6 +218,9 @@ class ConverterMainWindow(QMainWindow):
         self.current_metadata = None  # Store loaded metadata
         self.metadata_source_dir = None  # Source directory used for the current metadata
         self.mp3_duration = 0.0  # Store total MP3 duration
+        self.file_populated_fields = set()  # Fields filled from the metadata file
+        self._cli_explicit_fields = set()    # Fields explicitly set via CLI flags
+        self._analysis_source = None        # Source dir being analyzed (stale-guard)
 
         self.init_ui()
 
@@ -486,9 +475,9 @@ class ConverterMainWindow(QMainWindow):
 
         meta_layout.addWidget(QLabel("Year:"), 1, 2)
         self.year_spin = QSpinBox()
-        self.year_spin.setRange(1000, 2100)
-        import datetime
-        self.year_spin.setValue(datetime.date.today().year)
+        self.year_spin.setRange(0, 2100)
+        self.year_spin.setSpecialValueText("Not specified")
+        self.year_spin.setValue(0)
         meta_layout.addWidget(self.year_spin, 1, 3)
 
         meta_layout.addWidget(QLabel("Genre:"), 2, 0)
@@ -515,6 +504,11 @@ class ConverterMainWindow(QMainWindow):
         self.media_type_spin.setRange(0, 255)
         self.media_type_spin.setValue(2)
         meta_layout.addWidget(self.media_type_spin, 4, 1)
+
+        meta_layout.addWidget(QLabel("Narrator:"), 4, 2)
+        self.narrator_edit = QLineEdit()
+        self.narrator_edit.setPlaceholderText("Optional narrator name")
+        meta_layout.addWidget(self.narrator_edit, 4, 3)
 
         meta_group.setLayout(meta_layout)
 
@@ -590,7 +584,7 @@ class ConverterMainWindow(QMainWindow):
         # Replace "Preview Chapters" with "Edit Chapters"
         self.edit_chapters_btn = QPushButton("✏️ Edit Chapters...")
         self.edit_chapters_btn.clicked.connect(self.edit_chapters)
-        self.edit_chapters_btn.setEnabled(False)
+        self.edit_chapters_btn.setEnabled(True)
 
         self.load_chapters_btn = QPushButton("📖 Load Chapters")
         self.load_chapters_btn.clicked.connect(self.load_and_analyze_chapters)
@@ -703,9 +697,6 @@ class ConverterMainWindow(QMainWindow):
         batch_group = QGroupBox("Batch Processing")
         batch_layout = QVBoxLayout()
 
-        self.batch_check = QCheckBox("Process all subdirectories")
-        self.batch_check.toggled.connect(self.toggle_batch_mode)
-
         self.batch_list = ClickableCheckListWidget()
         self.batch_list.setSelectionMode(QListWidget.NoSelection)
 
@@ -722,7 +713,6 @@ class ConverterMainWindow(QMainWindow):
         select_buttons.addWidget(self.deselect_all_btn)
         select_buttons.addStretch()
 
-        batch_layout.addWidget(self.batch_check)
         batch_layout.addWidget(QLabel("Found directories:"))
         batch_layout.addWidget(self.batch_list)
         batch_layout.addWidget(self.scan_batch_btn)
@@ -917,14 +907,6 @@ class ConverterMainWindow(QMainWindow):
         """Enable/disable manual bitrate selection"""
         self.bitrate_combo.setEnabled(not checked)
 
-    def toggle_batch_mode(self, checked):
-        """Enable/disable batch mode controls"""
-        self.batch_list.setEnabled(checked)
-        self.scan_batch_btn.setEnabled(checked)
-        self.select_all_btn.setEnabled(checked)
-        self.deselect_all_btn.setEnabled(checked)
-        self.pattern_edit_batch.setEnabled(checked)
-
     def on_chapter_format_changed(self, text):
         """Handle chapter format selection change"""
         pass
@@ -942,14 +924,26 @@ class ConverterMainWindow(QMainWindow):
         if source_dir == self.metadata_source_dir:
             return
 
+        # New source directory: clear the previous book's metadata, then load
+        # the new file if present (file values take precedence over CLI values).
+        self.metadata_source_dir = source_dir
+        self._reset_metadata_fields(source_dir)
+        self.current_metadata = None
+        self.chapter_file_edit.setText("")
+        self.chapters_status_label.setText("")
+        self.chapters_info_label.clear()
+        self.chapters_info_label.setVisible(False)
+        self.edit_chapters_btn.setEnabled(True)
+        self.mp3_duration = 0.0
+
         metadata_path = Path(source_dir) / "metadata" / "metadata.json"
         if not metadata_path.exists():
+            self.chapters_status_label.setText("No metadata.json found - using defaults")
             return
         try:
             self.chapter_file_edit.setText(str(metadata_path))
             self.chapter_format_combo.setCurrentText("Libby (metadata.json)")
             self.current_metadata = chapter_parser.load_chapters(str(metadata_path), format='libby')
-            self.metadata_source_dir = source_dir
             self.populate_metadata_fields(self.current_metadata)
             self.chapters_status_label.setText("Metadata loaded from metadata.json")
             self.analyze_mp3_duration()
@@ -957,30 +951,58 @@ class ConverterMainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to load metadata.json: {str(e)}")
 
     def populate_metadata_fields(self, metadata):
-        self.title_edit.setText(metadata.title or "")
-        self.author_edit.setText(metadata.author or "")
-        album_value = metadata.album or metadata.title or ""
-        self.album_edit.setText(album_value)
+        """Fill metadata fields from a loaded file.
+
+        File values take precedence: a field is only filled when the file
+        actually provides a value, and existing CLI/user-entered values are
+        never cleared. Tracks which fields the file populated so CLI args can
+        fill only the remaining gaps.
+        """
+        populated = set()
+        if metadata.title:
+            self.title_edit.setText(metadata.title)
+            populated.add('title')
+        if metadata.author:
+            self.author_edit.setText(metadata.author)
+            populated.add('author')
+        if metadata.narrator:
+            self.narrator_edit.setText(metadata.narrator)
+            populated.add('narrator')
+        if metadata.album:
+            self.album_edit.setText(metadata.album)
+            populated.add('album')
+        elif metadata.title and 'album' not in self._cli_explicit_fields:
+            self.album_edit.setText(metadata.title)
         if metadata.year:
             self.year_spin.setValue(metadata.year)
+            populated.add('year')
         if metadata.genre:
             self.genre_edit.setText(metadata.genre)
+            populated.add('genre')
         if metadata.comment:
             self.comment_edit.setText(metadata.comment)
-        if metadata.track_number:
+            populated.add('comment')
+        if metadata.track_number is not None:
             self.track_spin.setValue(metadata.track_number)
-        sort_name_value = metadata.sort_name or metadata.title or ""
-        self.sort_name_edit.setText(sort_name_value)
+            populated.add('track')
+        if metadata.sort_name:
+            self.sort_name_edit.setText(metadata.sort_name)
+            populated.add('sort_name')
+        elif metadata.title and 'sort_name' not in self._cli_explicit_fields:
+            self.sort_name_edit.setText(metadata.title)
         if metadata.media_type is not None:
             self.media_type_spin.setValue(metadata.media_type)
+            populated.add('media_type')
+        self.file_populated_fields = populated
 
     def update_current_metadata_from_fields(self):
         if not self.current_metadata:
             return
         self.current_metadata.title = self.title_edit.text().strip() or ""
         self.current_metadata.author = self.author_edit.text().strip() or None
+        self.current_metadata.narrator = self.narrator_edit.text().strip() or None
         self.current_metadata.album = self.album_edit.text().strip() or None
-        self.current_metadata.year = self.year_spin.value()
+        self.current_metadata.year = self.year_spin.value() or None
         self.current_metadata.genre = self.genre_edit.text().strip() or None
         self.current_metadata.comment = self.comment_edit.text().strip() or None
         self.current_metadata.track_number = self.track_spin.value()
@@ -988,7 +1010,13 @@ class ConverterMainWindow(QMainWindow):
         self.current_metadata.media_type = self.media_type_spin.value()
 
     def scan_batch_directories(self):
-        """Scan for subdirectories with MP3 files"""
+        """Scan for audiobook folders under the source directory.
+
+        Books are found at any depth (recursive) or one level down (non-
+        recursive). Each book is listed once; the disc subdirectories of a
+        multi-CD book (e.g. `Book2/CD01`) are also shown, unchecked, so you can
+        still convert a single disc on its own.
+        """
         source_dir = self.source_edit.text()
         if not source_dir or not Path(source_dir).exists():
             QMessageBox.warning(self, "Warning", "Please select a valid source directory first")
@@ -997,28 +1025,53 @@ class ConverterMainWindow(QMainWindow):
         self.batch_list.clear()
         source_path = Path(source_dir)
         pattern = self.pattern_edit.text() or "*.mp3"
-        import fnmatch
+        from PostRipM4B import find_batch_books, find_matching_files
 
-        found = []
-        for root, dirs, files in os.walk(source_path):
-            root_path = Path(root)
-            if root_path == source_path:
-                continue
-            # Check if this directory contains files matching the Input-tab pattern
+        def _count(folder):
+            total = len(find_matching_files(folder, pattern))
             try:
-                mp3_files = [f for f in root_path.iterdir()
-                             if f.is_file() and fnmatch.fnmatch(f.name, pattern)]
+                for name in os.listdir(folder):
+                    sub = os.path.join(folder, name)
+                    if os.path.isdir(sub):
+                        total += len(find_matching_files(sub, pattern))
             except OSError:
-                continue
-            if mp3_files:
-                found.append((root_path, len(mp3_files)))
+                pass
+            return total
 
-        for root_path, count in sorted(found, key=lambda x: str(x[0])):
-            item_text = f"{root_path.relative_to(source_path)} ({count} MP3 files)"
+        books = find_batch_books(
+            source_dir, pattern, self.recursive_check.isChecked()
+        )
+
+        for folder in books:
+            rel = os.path.relpath(folder, source_dir)
+            item_text = f"{rel} ({_count(folder)} MP3 files)"
             list_item = QListWidgetItem(item_text)
-            list_item.setData(Qt.UserRole, str(root_path))
+            list_item.setData(Qt.UserRole, folder)
             list_item.setCheckState(Qt.Checked)
             self.batch_list.addItem(list_item)
+
+        # Show the disc subdirectories of multi-CD books as unchecked extras.
+        if self.recursive_check.isChecked():
+            for folder in books:
+                if find_matching_files(folder, pattern):
+                    continue
+                try:
+                    discs = [
+                        os.path.join(folder, name)
+                        for name in sorted(os.listdir(folder))
+                        if os.path.isdir(os.path.join(folder, name))
+                    ]
+                except OSError:
+                    continue
+                for disc in discs:
+                    count = len(find_matching_files(disc, pattern))
+                    if not count:
+                        continue
+                    rel = os.path.relpath(disc, source_dir)
+                    list_item = QListWidgetItem(f"{rel} ({count} MP3 files)")
+                    list_item.setData(Qt.UserRole, disc)
+                    list_item.setCheckState(Qt.Unchecked)
+                    self.batch_list.addItem(list_item)
 
     def select_all_batch(self):
         """Select (check) every batch entry."""
@@ -1044,12 +1097,10 @@ class ConverterMainWindow(QMainWindow):
     def using_batch_mode(self):
         """Return True when batch processing is active.
 
-        Batch mode is active when the "Process all subdirectories" checkbox is
-        checked OR when the user has scanned and checked folders in the Batch
-        list. This ensures selecting folders in the Batch tab actually triggers
-        batch conversion even if the checkbox is left off.
+        Batch mode is active when the user has scanned and checked folders in
+        the Batch list.
         """
-        return self.batch_check.isChecked() or bool(self.get_selected_batch_folders())
+        return bool(self.get_selected_batch_folders())
 
     def load_and_analyze_chapters(self):
         """Load chapters and analyze MP3 files for duration"""
@@ -1127,6 +1178,7 @@ class ConverterMainWindow(QMainWindow):
         self.status_bar.showMessage("Analyzing MP3 files...")
 
         # Create and start analyzer thread
+        self._analysis_source = str(Path(source_dir).absolute())
         self.mp3_analyzer_thread = MP3AnalyzerThread(
             source_dir,
             pattern=self.pattern_edit.text(),
@@ -1138,12 +1190,22 @@ class ConverterMainWindow(QMainWindow):
         self.mp3_analyzer_thread.error_signal.connect(self.on_mp3_analysis_error)
         self.mp3_analyzer_thread.start()
 
+    def _source_is_current(self):
+        """Whether the active source directory still matches the one being analyzed."""
+        current = str(Path(self.source_edit.text()).absolute()) if self.source_edit.text() else None
+        return current is not None and current == self._analysis_source
+
     def on_mp3_analysis_progress(self, message):
         """Handle MP3 analysis progress updates"""
         self.chapters_status_label.setText(message)
 
     def on_mp3_analysis_finished(self, total_duration, file_durations):
         """Handle MP3 analysis completion"""
+        # Ignore stale results if the user switched to a different book while
+        # the analysis was running.
+        if not self._source_is_current():
+            return
+
         self.mp3_duration = total_duration
 
         # Update UI with chapter information
@@ -1156,6 +1218,11 @@ class ConverterMainWindow(QMainWindow):
 
     def on_mp3_analysis_error(self, error_message):
         """Handle MP3 analysis error"""
+        # Ignore stale results if the user switched to a different book while
+        # the analysis was running.
+        if not self._source_is_current():
+            return
+
         # Use estimated duration from metadata if available
         if self.current_metadata:
             self.mp3_duration = self.current_metadata.total_duration.total_seconds()
@@ -1200,15 +1267,17 @@ class ConverterMainWindow(QMainWindow):
 
     def edit_chapters(self):
         """Open the chapter editor dialog"""
-        if not self.current_metadata:
-            QMessageBox.warning(self, "Warning", "No chapters loaded. Please load chapters first.")
-            return
-
-        self.update_current_metadata_from_fields()
-
         if ChapterEditorDialog is None:
             QMessageBox.warning(self, "Error", "Chapter editor module not available.")
             return
+
+        # If no metadata is loaded (e.g. a book with no metadata file), build
+        # one from the current fields so chapters can be created from scratch.
+        had_metadata = self.current_metadata is not None
+        if not had_metadata:
+            self.current_metadata = self._metadata_from_fields()
+
+        self.update_current_metadata_from_fields()
 
         # Create editor dialog
         editor = ChapterEditorDialog(
@@ -1221,9 +1290,31 @@ class ConverterMainWindow(QMainWindow):
         editor.chapters_updated.connect(self.on_chapters_updated)
 
         # Show dialog
-        if editor.exec_() == QDialog.Accepted:
-            # The signal handler will update everything
-            pass
+        accepted = editor.exec_() == QDialog.Accepted
+
+        # If the dialog was cancelled and there was no real metadata before,
+        # restore the no-metadata state (don't keep a placeholder).
+        if not accepted and not had_metadata:
+            self.current_metadata = None
+            self.chapters_info_label.clear()
+            self.chapters_info_label.setVisible(False)
+
+    def _metadata_from_fields(self):
+        """Build a fresh Metadata object from the current GUI field values."""
+        return chapter_parser.Metadata(
+            title=self.title_edit.text().strip() or "",
+            author=self.author_edit.text().strip() or None,
+            narrator=self.narrator_edit.text().strip() or None,
+            album=self.album_edit.text().strip() or None,
+            year=self.year_spin.value() or None,
+            genre=self.genre_edit.text().strip() or None,
+            comment=self.comment_edit.text().strip() or None,
+            track_number=self.track_spin.value(),
+            sort_name=self.sort_name_edit.text().strip() or None,
+            media_type=self.media_type_spin.value(),
+            total_duration=timedelta(seconds=0),
+            chapters=[]
+        )
 
     def apply_cli_args_or_defaults(self):
         """Apply CLI arguments if provided, otherwise set defaults"""
@@ -1261,6 +1352,92 @@ class ConverterMainWindow(QMainWindow):
             self.source_edit.setText(default_music_dir)
             self.dest_edit.setText(default_output_dir)
             # Leave temp dir empty for auto-detection
+
+    def _apply_cli_metadata_values(self):
+        """Apply CLI metadata values to fields the metadata file did not populate."""
+        if not self.cli_args:
+            return
+
+        self._cli_explicit_fields = set()
+
+        cli_title = self.cli_args.title if hasattr(self.cli_args, 'title') and self.cli_args.title else None
+        cli_sort_name = self.cli_args.sort_name if hasattr(self.cli_args, 'sort_name') and self.cli_args.sort_name else None
+        cli_album = self.cli_args.album if hasattr(self.cli_args, 'album') and self.cli_args.album else None
+
+        if cli_title and 'title' not in self.file_populated_fields:
+            self.title_edit.setText(cli_title)
+            self._cli_explicit_fields.add('title')
+        if cli_sort_name and 'sort_name' not in self.file_populated_fields:
+            self.sort_name_edit.setText(cli_sort_name)
+            self._cli_explicit_fields.add('sort_name')
+        elif cli_title and 'sort_name' not in self.file_populated_fields:
+            self.sort_name_edit.setText(cli_title)
+        if cli_album and 'album' not in self.file_populated_fields:
+            self.album_edit.setText(cli_album)
+            self._cli_explicit_fields.add('album')
+        elif cli_title and 'album' not in self.file_populated_fields:
+            self.album_edit.setText(cli_title)
+
+        if hasattr(self.cli_args, 'author') and self.cli_args.author and 'author' not in self.file_populated_fields:
+            self.author_edit.setText(self.cli_args.author)
+            self._cli_explicit_fields.add('author')
+
+        if hasattr(self.cli_args, 'narrator') and self.cli_args.narrator and 'narrator' not in self.file_populated_fields:
+            self.narrator_edit.setText(self.cli_args.narrator)
+            self._cli_explicit_fields.add('narrator')
+
+        if hasattr(self.cli_args, 'year') and self.cli_args.year and 'year' not in self.file_populated_fields:
+            self.year_spin.setValue(int(self.cli_args.year))
+            self._cli_explicit_fields.add('year')
+
+        if hasattr(self.cli_args, 'genre') and self.cli_args.genre and 'genre' not in self.file_populated_fields:
+            self.genre_edit.setText(self.cli_args.genre)
+            self._cli_explicit_fields.add('genre')
+
+        if hasattr(self.cli_args, 'comment') and self.cli_args.comment and 'comment' not in self.file_populated_fields:
+            self.comment_edit.setText(self.cli_args.comment)
+            self._cli_explicit_fields.add('comment')
+
+        if hasattr(self.cli_args, 'track_num') and self.cli_args.track_num is not None and 'track' not in self.file_populated_fields:
+            self.track_spin.setValue(self.cli_args.track_num)
+            self._cli_explicit_fields.add('track')
+
+        if hasattr(self.cli_args, 'media_type') and self.cli_args.media_type is not None and 'media_type' not in self.file_populated_fields:
+            self.media_type_spin.setValue(self.cli_args.media_type)
+            self._cli_explicit_fields.add('media_type')
+
+    def _reset_metadata_fields(self, source_dir=None):
+        """Reset metadata fields to defaults, then re-apply CLI-provided values.
+
+        Used when a source directory is selected, so the previous book's
+        values don't linger. When no title is available (no CLI title and, if
+        a metadata file is later loaded, none provided by it), the title falls
+        back to the name of the directory containing the MP3 files, and album
+        and sort name are populated from that title unless explicitly set.
+        """
+        self.title_edit.setText("")
+        self.author_edit.setText("")
+        self.narrator_edit.setText("")
+        self.album_edit.setText("")
+        self.genre_edit.setText("Audiobook")
+        self.comment_edit.setText("")
+        self.year_spin.setValue(0)
+        self.track_spin.setValue(1)
+        self.sort_name_edit.setText("")
+        self.media_type_spin.setValue(2)
+        self.file_populated_fields = set()
+        self._apply_cli_metadata_values()
+
+        if not self.title_edit.text():
+            folder = os.path.basename(os.path.normpath(source_dir)) if source_dir else ""
+            if not folder or folder == ".":
+                folder = ""
+            if folder:
+                self.title_edit.setText(folder)
+                if 'album' not in self._cli_explicit_fields and not self.album_edit.text():
+                    self.album_edit.setText(folder)
+                if 'sort_name' not in self._cli_explicit_fields and not self.sort_name_edit.text():
+                    self.sort_name_edit.setText(folder)
 
     def apply_cli_args(self):
         """Apply CLI arguments to GUI fields"""
@@ -1315,39 +1492,9 @@ class ConverterMainWindow(QMainWindow):
             elif self.cli_args.chapters == 2:
                 self.channels_combo.setCurrentText("2 (Stereo)")
 
-        # Metadata settings
-        cli_title = self.cli_args.title if hasattr(self.cli_args, 'title') and self.cli_args.title else None
-        cli_sort_name = self.cli_args.sort_name if hasattr(self.cli_args, 'sort_name') and self.cli_args.sort_name else None
-        cli_album = self.cli_args.album if hasattr(self.cli_args, 'album') and self.cli_args.album else None
-
-        if cli_title:
-            self.title_edit.setText(cli_title)
-        if cli_sort_name:
-            self.sort_name_edit.setText(cli_sort_name)
-        elif cli_title:
-            self.sort_name_edit.setText(cli_title)
-        if cli_album:
-            self.album_edit.setText(cli_album)
-        elif cli_title:
-            self.album_edit.setText(cli_title)
-
-        if hasattr(self.cli_args, 'author') and self.cli_args.author:
-            self.author_edit.setText(self.cli_args.author)
-
-        if hasattr(self.cli_args, 'year') and self.cli_args.year:
-            self.year_spin.setValue(int(self.cli_args.year))
-
-        if hasattr(self.cli_args, 'genre') and self.cli_args.genre:
-            self.genre_edit.setText(self.cli_args.genre)
-
-        if hasattr(self.cli_args, 'comment') and self.cli_args.comment:
-            self.comment_edit.setText(self.cli_args.comment)
-
-        if hasattr(self.cli_args, 'track_num') and self.cli_args.track_num is not None:
-            self.track_spin.setValue(self.cli_args.track_num)
-
-        if hasattr(self.cli_args, 'media_type') and self.cli_args.media_type is not None:
-            self.media_type_spin.setValue(self.cli_args.media_type)
+        # Metadata settings - CLI values fill only fields the metadata file
+        # did not populate (file values take precedence).
+        self._apply_cli_metadata_values()
 
         # Chapter files
         chapter_file = None
@@ -1420,7 +1567,9 @@ class ConverterMainWindow(QMainWindow):
 
         # Batch processing
         if hasattr(self.cli_args, 'batch') and self.cli_args.batch:
-            self.batch_check.setChecked(True)
+            # Populate the batch list automatically if a source is available.
+            if self.source_edit.text() and Path(self.source_edit.text()).exists():
+                self.scan_batch_directories()
 
         if hasattr(self.cli_args, 'output_pattern') and self.cli_args.output_pattern:
             self.pattern_edit_batch.setText(self.cli_args.output_pattern)
@@ -1594,6 +1743,7 @@ class ConverterMainWindow(QMainWindow):
             # applies folder-name defaults per book.
             config.title = None
             config.author = None
+            config.narrator = None
             config.year = None
             config.genre = None
             config.comment = None
@@ -1614,6 +1764,7 @@ class ConverterMainWindow(QMainWindow):
             # Metadata
             config.title = self.title_edit.text().strip() or None
             config.author = self.author_edit.text().strip() or None
+            config.narrator = self.narrator_edit.text().strip() or None
             config.year = self.year_spin.value() or None
             config.genre = self.genre_edit.text().strip() or None
             config.comment = self.comment_edit.text().strip() or None
@@ -1627,7 +1778,9 @@ class ConverterMainWindow(QMainWindow):
 
             # Chapter metadata - use edited metadata if available
             if self.current_metadata:
-                # Save current metadata to a temporary file
+                # Sync any field edits made since the metadata was last loaded,
+                # then save it to a temporary file
+                self.update_current_metadata_from_fields()
                 import tempfile
                 temp_dir = tempfile.mkdtemp()
                 temp_chapter_file = os.path.join(temp_dir, "edited_chapters.txt")
@@ -1742,7 +1895,10 @@ class ConverterMainWindow(QMainWindow):
 
         # Check for MP3 files
         pattern = self.pattern_edit.text()
-        mp3_files = list(Path(source_dir).glob(pattern))
+        from PostRipM4B import find_mp3_files
+        mp3_files = find_mp3_files(
+            source_dir, pattern, self.recursive_check.isChecked()
+        )
         if not mp3_files:
             QMessageBox.warning(self, "Warning",
                               f"No {pattern} files found in:\n{source_dir}")

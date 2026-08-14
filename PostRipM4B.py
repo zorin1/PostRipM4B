@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.3.1"
+VERSION = "1.4"
 
 # Optional imports for audio metadata
 try:
@@ -156,6 +156,7 @@ class Config:
     # Book metadata (can override chapter file metadata)
     title: Optional[str] = None
     author: Optional[str] = None
+    narrator: Optional[str] = None
     year: Optional[int] = None
     genre: Optional[str] = None
     comment: Optional[str] = None
@@ -215,6 +216,8 @@ class Config:
             config.title = args.title
         if hasattr(args, 'author'):
             config.author = args.author
+        if hasattr(args, 'narrator'):
+            config.narrator = args.narrator
         if hasattr(args, 'year'):
             config.year = args.year
         if hasattr(args, 'genre'):
@@ -345,13 +348,13 @@ class Config:
         if hasattr(args, 'author'):
             config.author = args.author
 
-        import datetime
-        current_year = datetime.date.today().year
+        if hasattr(args, 'narrator'):
+            config.narrator = args.narrator
 
         if hasattr(args, 'year') and args.year is not None:
             config.year = args.year
         else:
-            config.year = current_year
+            config.year = None
 
         if hasattr(args, 'genre'):
             config.genre = args.genre
@@ -742,6 +745,7 @@ class AudioBookConverter:
 
             sort_name = metadata.sort_name or metadata.title
             self._set_itunes_sort_name(self.output_file, sort_name)
+            self._set_itunes_narrator(self.output_file, metadata.narrator)
 
             # Cleanup - NEW: Clean up temp chapter directory
             if not self.config.keep_temp:
@@ -790,6 +794,11 @@ class AudioBookConverter:
             self.progress.step_end(True, f"Using edited metadata: '{metadata.title}' by {metadata.author or 'Unknown'}")
             return metadata
 
+        # Fallback title: name of the directory containing the MP3 files.
+        folder_title = os.path.basename(os.path.normpath(self.config.input_dir))
+        if not folder_title or folder_title == ".":
+            folder_title = "Unknown Title"
+
         # First check if we have a chapter file specified
         if self.config.chapter_file and os.path.exists(self.config.chapter_file):
             try:
@@ -798,20 +807,21 @@ class AudioBookConverter:
                     format=self.config.chapter_format
                 )
 
-                # Always apply CLI overrides (CLI values take precedence over metadata file)
+                # Always apply CLI overrides (metadata file values take precedence;
+                # CLI values fill in only when the file lacks a field)
                 metadata = chapter_parser.Metadata(
-                    title=self.config.title or metadata.title,
-                    author=self.config.author or metadata.author,
-                    narrator=metadata.narrator,
+                    title=metadata.title or self.config.title or folder_title,
+                    author=metadata.author or self.config.author,
+                    narrator=metadata.narrator or self.config.narrator,
                     total_duration=metadata.total_duration,
                     chapters=metadata.chapters,
-                    year=self.config.year if self.config.year is not None else metadata.year,
-                    genre=self.config.genre or metadata.genre,
-                    comment=self.config.comment or metadata.comment,
-                    track_number=self.config.track_number if self.config.track_number is not None else metadata.track_number,
-                    sort_name=self.config.sort_name or metadata.sort_name,
-                    media_type=self.config.media_type if self.config.media_type is not None else metadata.media_type,
-                    album=self.config.album or metadata.album
+                    year=metadata.year if metadata.year is not None else self.config.year,
+                    genre=metadata.genre or self.config.genre,
+                    comment=metadata.comment or self.config.comment,
+                    track_number=metadata.track_number if metadata.track_number is not None else self.config.track_number,
+                    sort_name=metadata.sort_name or self.config.sort_name,
+                    media_type=metadata.media_type if metadata.media_type is not None else self.config.media_type,
+                    album=metadata.album or self.config.album
                 )
 
                 self.progress.step_end(True, f"'{metadata.title}' by {metadata.author or 'Unknown'}")
@@ -838,20 +848,21 @@ class AudioBookConverter:
                     format=self.config.chapter_format
                 )
 
-                # Always apply CLI overrides (CLI values take precedence over metadata file)
+                # Always apply CLI overrides (metadata file values take precedence;
+                # CLI values fill in only when the file lacks a field)
                 metadata = chapter_parser.Metadata(
-                    title=self.config.title or metadata.title,
-                    author=self.config.author or metadata.author,
-                    narrator=metadata.narrator,
+                    title=metadata.title or self.config.title or folder_title,
+                    author=metadata.author or self.config.author,
+                    narrator=metadata.narrator or self.config.narrator,
                     total_duration=metadata.total_duration,
                     chapters=metadata.chapters,
-                    year=self.config.year if self.config.year is not None else metadata.year,
-                    genre=self.config.genre or metadata.genre,
-                    comment=self.config.comment or metadata.comment,
-                    track_number=self.config.track_number if self.config.track_number is not None else metadata.track_number,
-                    sort_name=self.config.sort_name or metadata.sort_name,
-                    media_type=self.config.media_type if self.config.media_type is not None else metadata.media_type,
-                    album=self.config.album or metadata.album
+                    year=metadata.year if metadata.year is not None else self.config.year,
+                    genre=metadata.genre or self.config.genre,
+                    comment=metadata.comment or self.config.comment,
+                    track_number=metadata.track_number if metadata.track_number is not None else self.config.track_number,
+                    sort_name=metadata.sort_name or self.config.sort_name,
+                    media_type=metadata.media_type if metadata.media_type is not None else self.config.media_type,
+                    album=metadata.album or self.config.album
                 )
 
                 if self.config.batch:
@@ -865,12 +876,7 @@ class AudioBookConverter:
                 raise RuntimeError(f"Failed to load metadata file: {str(e)}")
 
         # If no metadata file found, generate from config/directory name
-        title = self.config.title
-        if not title:
-            # Use the last part of the input directory as title
-            title = os.path.basename(os.path.normpath(self.config.input_dir))
-            if not title or title == ".":
-                title = "Unknown Title"
+        title = self.config.title or folder_title
 
         self.progress.step_end(True, f"Using generated metadata: '{title}'")
 
@@ -878,7 +884,7 @@ class AudioBookConverter:
         metadata = chapter_parser.Metadata(
             title=title,
             author=self.config.author,
-            narrator=None,
+            narrator=self.config.narrator,
             total_duration=timedelta(seconds=0),  # Will be updated later
             chapters=[],
             year=self.config.year,
@@ -952,27 +958,12 @@ class AudioBookConverter:
         return metadata
 
     def _find_mp3_files(self) -> List[str]:
-        """Find MP3 files in input directory"""
+        """Find MP3 files in input directory (scanning at most one level of subdirs)"""
         self.progress.step_start("Finding MP3 files")
 
-        import fnmatch
-
-        mp3_files = []
-
-        if self.config.recursive:
-            for root, dirs, files in os.walk(self.config.input_dir):
-                for file in files:
-                    if fnmatch.fnmatch(file, self.config.pattern):
-                        mp3_files.append(os.path.join(root, file))
-        else:
-            for file in os.listdir(self.config.input_dir):
-                if fnmatch.fnmatch(file, self.config.pattern):
-                    mp3_files.append(os.path.join(self.config.input_dir, file))
-
-        # Sort files naturally by path (directory first, then filename) so that
-        # multi-directory books like CD1/CD2/CD3 keep their logical order.
-        mp3_files.sort(key=lambda x: [int(t) if t.isdigit() else t.lower()
-                                     for t in re.split(r'(\d+)', os.path.relpath(x, self.config.input_dir))])
+        mp3_files = find_mp3_files(
+            self.config.input_dir, self.config.pattern, self.config.recursive
+        )
 
         if not mp3_files:
             self.progress.step_end(False)
@@ -1326,7 +1317,7 @@ class AudioBookConverter:
                 value = value if value and str(value).strip() else None
                 return value
 
-            author = _expand_value(self.config.author or metadata.author)
+            author = _expand_value(metadata.author or self.config.author)
             year = _expand_value(metadata.year if metadata.year is not None else self.config.year)
 
             filename = self.config.output_pattern
@@ -1556,6 +1547,26 @@ class AudioBookConverter:
             self.progress.step_end(False)
             self.progress.warning(f"Failed to write iTunes Sort Name tag: {e}")
 
+    def _set_itunes_narrator(self, output_file: str, narrator: Optional[str]):
+        """Set iTunes narrator atoms (narrator + LYRICIST) using mutagen"""
+        if not narrator:
+            return
+        if MP4 is None:
+            self.progress.warning("mutagen not installed; skipping narrator tag")
+            return
+        self.progress.step_start("Writing narrator tag")
+        try:
+            from mutagen.mp4 import MP4FreeForm
+            mp4 = MP4(output_file)
+            narrator_bytes = narrator.encode('utf-8')
+            mp4["----:com.apple.iTunes:narrator"] = [MP4FreeForm(narrator_bytes)]
+            mp4["----:com.apple.iTunes:LYRICIST"] = [MP4FreeForm(narrator_bytes)]
+            mp4.save()
+            self.progress.step_end(True)
+        except Exception as e:
+            self.progress.step_end(False)
+            self.progress.warning(f"Failed to write narrator tag: {e}")
+
 # -----------------------------
 # GUI Launcher
 # -----------------------------
@@ -1751,6 +1762,10 @@ Examples:
     parser.add_argument(
         "--author",
         help="Override author"
+    )
+    parser.add_argument(
+        "--narrator",
+        help="Override narrator"
     )
     parser.add_argument(
         "--year",
@@ -1952,33 +1967,133 @@ Examples:
 
     return args
 
-def _collect_batch_folders(config: Config) -> List[str]:
-    """Return subdirectories (recursively) of config.input_dir that contain MP3 files."""
+def find_matching_files(directory: str, pattern: str) -> List[str]:
+    """Return files matching `pattern` located directly inside `directory`."""
     import fnmatch as _fnmatch
 
-    base = config.input_dir
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    return [
+        os.path.join(directory, name) for name in names
+        if os.path.isfile(os.path.join(directory, name))
+        and _fnmatch.fnmatch(name, pattern)
+    ]
+
+
+def find_mp3_files(input_dir: str, pattern: str, recursive: bool) -> List[str]:
+    """Find audio files, scanning at most one level of subdirectories.
+
+    Books are laid out as either `<book>/*.mp3` or `<book>/<CD##>/*.mp3`.
+    When `recursive` is set we scan the input directory and its immediate
+    subdirectories; deeper nesting is intentionally not searched.
+    """
+    import fnmatch as _fnmatch
+
+    files = list(find_matching_files(input_dir, pattern))
+
+    if recursive:
+        try:
+            subdirs = sorted(
+                os.path.join(input_dir, name)
+                for name in os.listdir(input_dir)
+                if os.path.isdir(os.path.join(input_dir, name))
+            )
+        except OSError:
+            subdirs = []
+        for subdir in subdirs:
+            files.extend(find_matching_files(subdir, pattern))
+
+    # Sort naturally by path so multi-directory books like CD1/CD2/CD3 keep
+    # their logical order instead of being interleaved.
+    return sorted(
+        files,
+        key=lambda x: [int(t) if t.isdigit() else t.lower()
+                       for t in re.split(r'(\d+)', os.path.relpath(x, input_dir))]
+    )
+
+
+def find_batch_books(base: str, pattern: str, recursive: bool) -> List[str]:
+    """Return audiobook folders under `base`.
+
+    `recursive=False` returns only the immediate subdirectories of `base`
+    that directly contain matching files (one level).
+
+    `recursive=True` walks to any depth. A folder counts as a single book when
+    it directly contains matching files, or when it has no matching files of
+    its own but its immediate subdirectories do (a multi-CD book like
+    `<book>/CD01`, `<book>/CD02`, ...). Folders that merely wrap other books
+    (e.g. a series folder containing Book1/Book2/Book3) are excluded, as are
+    the disc subdirectories of a multi-CD book (the book itself is returned
+    instead).
+    """
     if not os.path.isdir(base):
         return []
 
-    pattern = config.pattern or "*.mp3"
+    pattern = pattern or "*.mp3"
 
-    def _has_mp3(folder: str) -> bool:
+    def _has_direct_files(folder: str) -> bool:
+        return bool(find_matching_files(folder, pattern))
+
+    def _is_book(folder: str) -> bool:
+        # Book directly contains matching files.
+        if _has_direct_files(folder):
+            return True
+        # Multi-CD book: no direct files, but immediate subdirectories hold
+        # files. Exclude pure container folders whose children are themselves
+        # books (detected as subdirectories with their own file-holding
+        # subdirectories, e.g. `series/Book2/CD01`).
         try:
-            return any(
-                _fnmatch.fnmatch(f, pattern) for f in os.listdir(folder)
-            )
+            subdirs = [
+                os.path.join(folder, name)
+                for name in os.listdir(folder)
+                if os.path.isdir(os.path.join(folder, name))
+            ]
         except OSError:
             return False
+        if not any(_has_direct_files(s) for s in subdirs):
+            return False
+        for s in subdirs:
+            try:
+                grandchildren = [
+                    os.path.join(s, name)
+                    for name in os.listdir(s)
+                    if os.path.isdir(os.path.join(s, name))
+                ]
+            except OSError:
+                continue
+            if any(_has_direct_files(g) for g in grandchildren):
+                return False
+        return True
 
-    subdirs = []
-    for root, dirs, files in os.walk(base):
-        if root == base:
-            continue
-        if _has_mp3(root):
-            subdirs.append(root)
+    candidates = []
+    if recursive:
+        for root, dirs, files in os.walk(base):
+            if _is_book(root):
+                candidates.append(root)
+    else:
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            return []
+        for name in entries:
+            folder = os.path.join(base, name)
+            if os.path.isdir(folder) and _has_direct_files(folder):
+                candidates.append(folder)
 
-    subdirs.sort()
-    return subdirs
+    # Drop disc subfolders that are part of an already-listed multi-CD book
+    # (e.g. `Book2/CD01` when `Book2` itself is listed).
+    books = [c for c in candidates if os.path.dirname(c) not in candidates]
+    books.sort()
+    return books
+
+
+def _collect_batch_folders(config: Config) -> List[str]:
+    """Return audiobook folders for CLI batch mode (see `find_batch_books`)."""
+    return find_batch_books(
+        config.input_dir, config.pattern or "*.mp3", config.recursive
+    )
 
 
 def _build_batch_config(base_config: Config, folder: str, output_pattern: Optional[str]) -> Config:

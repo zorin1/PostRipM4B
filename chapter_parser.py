@@ -121,9 +121,6 @@ class Metadata:
         if not self.title or not self.title.strip():
             errors.append("Title is required")
 
-        if not self.author or not self.author.strip():
-            errors.append("Author is required")
-
         # Validate chapters
         if self.chapters:
             # Check chapter titles
@@ -409,6 +406,8 @@ def parse_ffmetadata_chapters(file_path: str) -> Metadata:
                 metadata['album'] = value
             elif key == 'artist':
                 metadata['author'] = value
+            elif key in ('narrator', '----:com.apple.itunes:narrator'):
+                metadata['narrator'] = value
             elif key == 'comment' and 'narrator' in value.lower():
                 # Try to extract narrator from comment
                 metadata['narrator'] = value
@@ -472,7 +471,7 @@ def parse_ffmetadata_chapters(file_path: str) -> Metadata:
     chapters.sort(key=lambda c: c.total_offset)
 
     return Metadata(
-        title=metadata['title'] or os.path.basename(file_path).rsplit('.', 1)[0],
+        title=metadata['title'],
         author=metadata['author'],
         narrator=metadata['narrator'],
         total_duration=metadata['total_duration'],
@@ -554,16 +553,13 @@ def parse_m4btool_chapters(file_path: str) -> Metadata:
     # Sort by timestamp
     chapters.sort(key=lambda c: c.total_offset)
 
-    # Use filename as title
-    title = os.path.basename(file_path).rsplit('.', 1)[0]
-
     return Metadata(
-        title=title,
+        title="",
         author=None,
         narrator=None,
         total_duration=timedelta(seconds=max_duration),
         chapters=chapters,
-        album=title
+        album=None
     )
 
 def parse_audacity_chapters(file_path: str) -> Metadata:
@@ -628,16 +624,13 @@ def parse_audacity_chapters(file_path: str) -> Metadata:
     # Sort by start time
     chapters.sort(key=lambda c: c.total_offset)
 
-    # Use filename as title
-    title = os.path.basename(file_path).rsplit('.', 1)[0]
-
     return Metadata(
-        title=title,
+        title="",
         author=None,
         narrator=None,
         total_duration=timedelta(seconds=max_duration),
         chapters=chapters,
-        album=title
+        album=None
     )
 
 def detect_chapter_format(file_path: str) -> Optional[str]:
@@ -737,6 +730,8 @@ def export_ffmetadata(metadata: Metadata, output_path: str):
         lines.append(f"sonm={sort_name}")
     if metadata.author:
         lines.append(f"artist={metadata.author}")
+    if metadata.narrator:
+        lines.append(f"----:com.apple.iTunes:narrator={metadata.narrator}")
     track_number = metadata.track_number if metadata.track_number is not None else 1
     lines.append(f"track={track_number}")
     media_type = metadata.media_type if metadata.media_type is not None else 2

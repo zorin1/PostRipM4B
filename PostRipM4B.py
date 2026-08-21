@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.4"
+VERSION = "1.4.1"
 
 # Optional imports for audio metadata
 try:
@@ -127,7 +127,23 @@ def get_default_music_dir() -> Path:
 # Configuration Class
 # -----------------------------
 
-@dataclass
+def resolve_temp_dir(temp_dir: Optional[str], input_dir: Optional[str], output_dir: Optional[str]) -> Optional[str]:
+    """Resolve the effective temp directory.
+
+    A user-supplied `temp_dir` is honored as-is (fixed override). Otherwise the
+    temp dir tracks the input dir (``input_dir/tmp``) so temporary files stay
+    next to the audiobook being processed. Falls back to ``output_dir/tmp`` only
+    when no input dir is available.
+    """
+    if temp_dir:
+        return temp_dir
+    if input_dir:
+        return os.path.join(input_dir, "tmp")
+    if output_dir:
+        return os.path.join(output_dir, "tmp")
+    return None
+
+
 class Config:
     """Configuration for the audiobook converter"""
     # Input/Output
@@ -169,7 +185,7 @@ class Config:
     workers: Optional[int] = None  # Auto-detect if None
     no_optimize: bool = False
     keep_temp: bool = False
-    temp_dir: str = field(default_factory=lambda: "")  # Will be set by parse_args
+    temp_dir: Optional[str] = None  # Default None => resolve_temp_dir tracks input
     max_retries: int = 3
 
     # Output Control
@@ -773,13 +789,11 @@ class AudioBookConverter:
             # Use default music directory if output_dir not specified
             self.config.output_dir = str(get_default_music_dir())
 
-        # Ensure temp_dir is set
-        if not self.config.temp_dir:
-            if self.config.input_dir:
-                self.config.temp_dir = os.path.join(self.config.input_dir, "tmp")
-            else:
-                # Fallback to output_dir/tmp
-                self.config.temp_dir = os.path.join(self.config.output_dir, "tmp")
+        # Ensure temp_dir is set: honor a manual override, otherwise track the
+        # input dir so temp stays inside the audiobook being processed.
+        self.config.temp_dir = resolve_temp_dir(
+            self.config.temp_dir, self.config.input_dir, self.config.output_dir
+        )
 
         os.makedirs(self.config.output_dir, exist_ok=True)
         os.makedirs(self.config.temp_dir, exist_ok=True)
@@ -1821,7 +1835,7 @@ Examples:
     )
     parser.add_argument(
         "--temp-dir",
-        help="Directory for temporary files (default: <input_dir>/tmp/)"
+        help="Directory for temporary files (default: tracks the input dir as <input_dir>/tmp/)"
     )
     parser.add_argument(
         "--max-retries",
@@ -1955,14 +1969,9 @@ Examples:
         if not args.output_dir:
             args.output_dir = os.path.join(args.input_dir, "m4b")
 
-    # Set temp_dir default if not provided (for both GUI and CLI)
-    if args.temp_dir is None:
-        if args.input_dir:
-            args.temp_dir = os.path.join(args.input_dir, "tmp")
-        else:
-            # This handles the GUI case where input_dir is None
-            args.temp_dir = os.path.join(get_default_music_dir(), "tmp")
-    else:
+    # Normalize an explicit temp_dir override. Leave it blank when not provided
+    # so the effective temp dir tracks the input dir via resolve_temp_dir.
+    if args.temp_dir is not None:
         args.temp_dir = os.path.abspath(args.temp_dir)
 
     return args
@@ -2122,6 +2131,10 @@ def _build_batch_config(base_config: Config, folder: str, output_pattern: Option
     cfg.no_optimize = base_config.no_optimize
     cfg.keep_temp = base_config.keep_temp
     cfg.max_retries = base_config.max_retries
+
+    # Temp directory: honor an explicit user override; otherwise each book
+    # derives its own <folder>/tmp via resolve_temp_dir in _setup_directories.
+    cfg.temp_dir = base_config.temp_dir
 
     # Output control
     cfg.verbosity = base_config.verbosity

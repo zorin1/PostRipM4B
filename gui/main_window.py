@@ -1810,14 +1810,9 @@ class ConverterMainWindow(QMainWindow):
             config.pattern = self.pattern_edit.text()
             config.exclude = self.exclude_edit.text() or None
 
-        # Temp directory
-        if batch:
-            # Batch mode: never use the GUI/CLI temp dir (it points at the
-            # scanned root). Each book derives its own <input_dir>/tmp so temp
-            # files stay inside the audiobook being processed.
-            config.temp_dir = None
-        else:
-            config.temp_dir = self.temp_edit.text() or None
+        # Temp directory: honor a manual override; otherwise each book derives
+        # its own <input_dir>/tmp via resolve_temp_dir in _setup_directories.
+        config.temp_dir = self.temp_edit.text() or None
 
         if not self.bitrate_auto.isChecked():
             config.bitrate = self.bitrate_combo.currentText()

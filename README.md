@@ -201,7 +201,7 @@ Values from the metadata/chapter file take precedence. Command-line values (and 
 - `-w, --workers`: Number of parallel workers (default: auto-detect)
 - `--no-optimize`: Skip optimization step
 - `--keep-temp`: Keep temporary files after completion
-- `--temp-dir`: Directory for temporary files (default: <input_dir>/tmp/)
+- `--temp-dir`: Directory for temporary files (default: tracks the input dir as <input_dir>/tmp/)
 - `--max-retries`: Maximum retries for failed conversions (default: 3)
 
 ### Output Control
@@ -335,6 +335,14 @@ For issues, questions, or feature requests:
 ---
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
+
+## Version 1.4.1
+
+This release makes the temporary-file directory smarter so temporary files stay next to the audiobook being processed.
+
+- **Temp directory defaults to the input folder**: when `--temp-dir` is not given, temporary files now live in `<input_dir>/tmp` (the folder of the audiobook being converted) instead of a global default. This keeps temp files with the book and avoids cross-book collisions.
+- **Explicit `--temp-dir` is honored as a fixed override**: any value you pass is used as-is and is no longer overridden. In single-book and batch mode alike, each book derives its own `<folder>/tmp` unless you specify one manually.
+- **GUI temp-directory field only used as an override**: the GUI now treats the "Temp Directory" field strictly as a manual override (cleared field = derive per-book from the input dir). Batch mode no longer forces/ignores it separately.
 
 ## Version 1.4
 

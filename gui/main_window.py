@@ -30,6 +30,19 @@ except ImportError as e:
     print(f"ERROR: Failed to import from PostRipM4B: {e}")
     raise
 
+try:
+    from gui import power_actions
+except ImportError as e:
+    print(f"ERROR: Failed to import gui.power_actions: {e}")
+    raise
+
+# "When done" actions (indices match the combo box order)
+WHEN_DONE_DO_NOTHING = 0
+WHEN_DONE_QUIT = 1
+WHEN_DONE_SLEEP = 2
+WHEN_DONE_SHUTDOWN = 3
+WHEN_DONE_COUNTDOWN_SECONDS = 60
+
 # PyQt5 imports
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTabWidget, QGroupBox, QLabel, QLineEdit,
@@ -38,8 +51,9 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QApplication, QGridLayout, QSplitter, QListWidget,
                              QListWidgetItem, QToolButton, QStyle, QStatusBar, QDialog,
                              QStyleOptionViewItem)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSettings
-from PyQt5.QtGui import QIcon, QFont, QPixmap
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QIcon, QFont, QPixmap, QStandardItemModel
+from PyQt5.QtGui import QStandardItem
 
 # Import the new chapter editor - FIXED IMPORT
 try:
@@ -221,6 +235,7 @@ class ConverterMainWindow(QMainWindow):
         self.file_populated_fields = set()  # Fields filled from the metadata file
         self._cli_explicit_fields = set()    # Fields explicitly set via CLI flags
         self._analysis_source = None        # Source dir being analyzed (stale-guard)
+        self._batch_cancelled = False
 
         self.init_ui()
 
@@ -731,8 +746,34 @@ class ConverterMainWindow(QMainWindow):
 
         pattern_group.setLayout(pattern_layout)
 
+        # After-batch action
+        when_done_group = QGroupBox("After Batch Completion")
+        when_done_layout = QHBoxLayout()
+
+        when_done_layout.addWidget(QLabel("When done:"))
+        self.when_done_combo = QComboBox()
+        actions = [
+            ("Do Nothing", True),
+            ("Quit", True),
+            ("Sleep", power_actions.can_sleep()),
+            ("Shutdown", power_actions.can_shutdown()),
+        ]
+        action_model = QStandardItemModel(self.when_done_combo)
+        for label, enabled in actions:
+            item = QStandardItem(label)
+            item.setEnabled(enabled)
+            if not enabled:
+                item.setToolTip("Not supported on this system")
+            action_model.appendRow(item)
+        self.when_done_combo.setModel(action_model)
+
+        when_done_layout.addWidget(self.when_done_combo)
+        when_done_layout.addStretch()
+        when_done_group.setLayout(when_done_layout)
+
         layout.addWidget(batch_group)
         layout.addWidget(pattern_group)
+        layout.addWidget(when_done_group)
         layout.addStretch()
 
         return tab
@@ -1444,6 +1485,27 @@ class ConverterMainWindow(QMainWindow):
         if not self.cli_args:
             return
 
+        # When-done override: session-only.
+        when_done_map = {
+            "nothing": WHEN_DONE_DO_NOTHING,
+            "quit": WHEN_DONE_QUIT,
+            "sleep": WHEN_DONE_SLEEP,
+            "shutdown": WHEN_DONE_SHUTDOWN,
+        }
+        when_done = getattr(self.cli_args, 'when_done', None)
+        if when_done in when_done_map:
+            index = when_done_map[when_done]
+            item = self.when_done_combo.model().item(index)
+            if item and item.isEnabled():
+                self.when_done_combo.blockSignals(True)
+                self.when_done_combo.setCurrentIndex(index)
+                self.when_done_combo.blockSignals(False)
+                self.log_output.append(
+                    f"CLI override: when done → {when_done} (session only, not saved)")
+            else:
+                print(f"Warning: --when-done '{when_done}' is not supported on this "
+                      f"system; using default.")
+
         # Check if user provided an input directory
         user_provided_dir = False
         if (hasattr(self.cli_args, 'input_dir_provided') and
@@ -1640,6 +1702,24 @@ class ConverterMainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No directories selected.\nScan subdirectories and select at least one.")
             return
 
+        action = self.when_done_combo.currentIndex()
+        if action == WHEN_DONE_SLEEP:
+            reply = QMessageBox.question(
+                self, "Confirm Sleep",
+                "The computer will be put to sleep when the batch finishes.\nContinue?",
+                QMessageBox.Yes | QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        elif action == WHEN_DONE_SHUTDOWN:
+            reply = QMessageBox.question(
+                self, "Confirm Shutdown",
+                "The computer will shut down when the batch finishes.\nContinue?",
+                QMessageBox.Yes | QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+
+        self._batch_cancelled = False
+
         # Reset UI for the whole batch
         self.progress_bar.setValue(0)
         self.log_output.clear()
@@ -1710,7 +1790,7 @@ class ConverterMainWindow(QMainWindow):
         self.run_batch_book(self.batch_index + 1)
 
     def batch_finished(self):
-        """Finalize the whole batch with a summary."""
+        """Finalize the whole batch with a summary, then run the when-done action."""
         if hasattr(self, 'timer'):
             self.timer.stop()
 
@@ -1718,7 +1798,88 @@ class ConverterMainWindow(QMainWindow):
 
         msg = f"{self.batch_success} of {self.batch_total} books completed successfully"
         self.status_bar.showMessage(msg)
-        QMessageBox.information(self, "Batch Complete", msg)
+        self.log_output.append(msg)
+
+        action = self.when_done_combo.currentIndex()
+        if self._batch_cancelled or action == WHEN_DONE_DO_NOTHING:
+            QMessageBox.information(self, "Batch Complete", msg)
+            return
+
+        if action == WHEN_DONE_QUIT:
+            action_text = "Quitting"
+        elif action == WHEN_DONE_SLEEP:
+            action_text = "Putting computer to sleep"
+        else:
+            action_text = "Shutting down the computer"
+
+        if not self.show_countdown_dialog(action_text):
+            QMessageBox.information(self, "Batch Complete", msg)
+            return
+
+        self.execute_when_done_action(action)
+
+    def show_countdown_dialog(self, action_text, timeout=WHEN_DONE_COUNTDOWN_SECONDS):
+        """Show a cancellable countdown before performing a when-done action.
+
+        Returns True if the countdown elapsed, False if cancelled.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Batch Complete")
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+
+        remaining = {"seconds": timeout}
+        summary = (f"{getattr(self, 'batch_success', 0)} of "
+                   f"{getattr(self, 'batch_total', 0)} books completed successfully.")
+        label = QLabel(
+            f"{summary}\n\n"
+            f"{action_text} in {timeout} seconds…")
+        layout.addWidget(label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+
+        timer = QTimer(dialog)
+        timer.setInterval(1000)
+
+        def tick():
+            remaining["seconds"] -= 1
+            if remaining["seconds"] <= 0:
+                timer.stop()
+                dialog.accept()
+            else:
+                label.setText(
+                    f"{summary}\n\n"
+                    f"{action_text} in {remaining['seconds']} seconds…")
+
+        timer.timeout.connect(tick)
+        timer.start()
+        result = dialog.exec_()
+        timer.stop()
+        return result == QDialog.Accepted
+
+    def execute_when_done_action(self, action):
+        """Perform the selected after-batch action."""
+        if action == WHEN_DONE_QUIT:
+            self.log_output.append("Batch complete. Quitting application.")
+            self.close()
+            return
+
+        if action == WHEN_DONE_SLEEP:
+            self.log_output.append("Batch complete. Putting computer to sleep…")
+            ok, err = power_actions.sleep_system()
+        else:
+            self.log_output.append("Batch complete. Shutting down computer…")
+            ok, err = power_actions.shutdown_system(delay_seconds=10)
+
+        if not ok:
+            self.log_output.append(f"✗ When-done action failed: {err}")
+            QMessageBox.warning(self, "Action Failed",
+                                f"Could not perform the requested action:\n{err}")
 
     def create_config_from_gui(self, input_dir=None, batch=False):
         """Create Config object from GUI values.
@@ -2013,6 +2174,7 @@ class ConverterMainWindow(QMainWindow):
                                        "Are you sure you want to cancel the conversion?",
                                        QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
+                self._batch_cancelled = True
                 self.worker_thread.terminate()
                 self.worker_thread.wait()
                 self.status_bar.showMessage("Conversion cancelled")

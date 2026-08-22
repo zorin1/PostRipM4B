@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 # Optional imports for audio metadata
 try:
@@ -1892,6 +1892,14 @@ Examples:
         "--exclude",
         help="Exclude files matching pattern"
     )
+    parser.add_argument(
+        "--when-done",
+        choices=["nothing", "quit", "sleep", "shutdown"],
+        default=None,
+        help="Action after conversion finishes (default: none - just exit). "
+             "In GUI mode this overrides the Batch tab 'When done' setting "
+             "for this session only; it is not saved."
+    )
 
     # Advanced
     parser.add_argument(
@@ -2192,6 +2200,38 @@ def _run_cli_batch(config: Config) -> bool:
     return total_success > 0
 
 
+def _run_when_done_action(action: Optional[str]):
+    """Perform the --when-done action after a conversion completes.
+
+    'none'/None means do nothing special: the application simply exits.
+    """
+    if not action or action == "nothing":
+        return
+
+    if action == "quit":
+        print("When done: quitting.")
+        return
+
+    from gui import power_actions
+
+    if action == "sleep":
+        if not power_actions.can_sleep():
+            print("When done: sleep is not supported on this system; skipping.")
+            return
+        print("When done: putting computer to sleep...")
+        ok, err = power_actions.sleep_system()
+    else:  # shutdown
+        if not power_actions.can_shutdown():
+            print("When done: shutdown is not supported on this system; skipping.")
+            return
+        print("When done: shutting down computer in 60 seconds (run 'shutdown /a' "
+              "on Windows to cancel)...")
+        ok, err = power_actions.shutdown_system(delay_seconds=60)
+
+    if not ok:
+        print(f"When done: action failed: {err}")
+
+
 # -----------------------------
 # Main Entry Point
 # -----------------------------
@@ -2215,12 +2255,14 @@ def main():
     # Batch mode: loop over subdirectories, each as its own audiobook
     if config.batch:
         success = _run_cli_batch(config)
+        _run_when_done_action(args.when_done)
         sys.exit(0 if success else 1)
 
     converter = AudioBookConverter(config)
     success = converter.run()
 
     # Exit with appropriate code
+    _run_when_done_action(args.when_done)
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":

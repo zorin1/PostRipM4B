@@ -12,6 +12,7 @@ PostRipM4B is a comprehensive audiobook converter designed specifically for proc
 - **Chapter Editor**: Built-in GUI editor for fine-tuning chapter timings and titles
 - **Cross-Platform**: Works on Windows, macOS, and Linux
 - **iTunes Sort Name**: Writes the Sort Name tag for M4B files
+- **"When done" actions**: Optionally quit, sleep, or shut down the computer after conversions finish (Batch tab or `--when-done`)
 
 ## Workflow
 
@@ -217,6 +218,7 @@ Values from the metadata/chapter file take precedence. Command-line values (and 
 - `-r, --recursive`: Recursively search for MP3 files
 - `--pattern`: File pattern to match (default: *.mp3)
 - `--exclude`: Exclude files matching pattern
+- `--when-done {nothing,quit,sleep,shutdown}`: Action after conversion finishes (default: none — the application just exits). Works for both single-book and batch conversions. In GUI mode this overrides the Batch tab's "When done" setting **for that session only** (it is not saved). Sleep and shutdown are skipped with a warning if the platform doesn't support them (e.g. no logind on Linux).
 
 ### Advanced
 - `--ffmpeg-path`: Custom path to ffmpeg binary
@@ -335,6 +337,21 @@ For issues, questions, or feature requests:
 ---
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
+
+## Version 1.4.2
+
+This release adds a "When done" feature (inspired by HandBrake) that lets the computer take an action automatically after conversions finish — handy for overnight, unattended batch rips.
+
+- **New Batch tab option: "After Batch Completion → When done"**: choose *Do Nothing* (default), *Quit*, *Sleep*, or *Shutdown*. The selection resets to *Do Nothing* on each launch (nothing is written to a config file). Sleep and Shutdown are greyed out automatically on systems that don't support them.
+- **Cancellable countdown before any action fires**: when the batch finishes with Quit/Sleep/Shutdown selected, a 60-second countdown dialog appears so you can cancel; otherwise the action runs.
+- **Confirmation before starting**: selecting Sleep or Shutdown asks for confirmation when you start a batch ("The computer will shut down when the batch finishes"). Cancelling a conversion manually never triggers an action.
+- **New `--when-done` CLI flag**: `{nothing,quit,sleep,shutdown}`, default none (the application simply exits as before). Works in both CLI and GUI modes:
+  - CLI: `python PostRipM4B.py --batch /path/to/books --when-done shutdown` shuts the computer down after the last book converts.
+  - GUI: overrides the Batch tab's "When done" setting **for that session only**.
+- **Cross-platform power actions** (`gui/power_actions.py`), mirroring HandBrake's approach per OS:
+  - **Windows**: `SetSuspendState` API (sleep) and `shutdown.exe` (power off)
+  - **macOS**: AppleScript via System Events
+  - **Linux**: logind over D-Bus (with `CanSuspend`/`CanPowerOff` capability checks; falls back from `busctl` to `dbus-send`)
 
 ## Version 1.4.1
 

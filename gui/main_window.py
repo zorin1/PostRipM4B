@@ -2089,7 +2089,7 @@ class ConverterMainWindow(QMainWindow):
             icon = "✓" if success == "True" else "✗"
             self.log_output.append(f"  {icon} {extra}" if extra else f"  {icon}")
         elif msg_type == 'info':
-            self.log_output.append(f"ℹ {message}")
+            self.log_output.append(f"ⓘ {message}")
         elif msg_type == 'header':
             self.log_output.append(f"\n════ {message} ════")
         elif msg_type == 'success':

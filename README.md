@@ -249,6 +249,7 @@ PostRipM4B/
 ├── chapter_parser.py      # Chapter format parsing module
 ├── requirements.txt       # Python dependencies
 ├── test_all_options.py    # Test the CLI command line options 
+├── test_concat_file.py    # Unit tests for concat-list escaping
 ├── gui/                   # GUI components
 │   ├── main_window.py     # Main GUI window
 │   └── chapter_editor.py  # Chapter editor dialog
@@ -337,6 +338,14 @@ For issues, questions, or feature requests:
 ---
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
+
+## Version 1.4.3
+
+This release fixes conversions failing for books whose folder or file names contain an apostrophe (e.g. `G. Z. Zzz - The Snoozing Dragon's Tail`).
+
+- **Fixed: apostrophe in paths broke concatenation**: the ffmpeg concat list wrapped each file path in single quotes without escaping, so an apostrophe in the input folder or file name terminated the quoted path early — ffmpeg then failed with "Impossible to open '...The Snoozing Dragon'". Paths are now escaped using the concat demuxer's `'\''` quoting rule, so any book or author name containing an apostrophe converts correctly.
+- **Improved info glyph**: the CLI and GUI log prefix `ℹ` (which many terminals render as a bare lowercase "i") was replaced with `ⓘ`.
+- **New unit test suite** (`test_concat_file.py`): verifies concat-list escaping round-trips through ffmpeg's quoting rules for paths with apostrophes (including multiple files), plus an end-to-end test that runs real ffmpeg against an apostrophe-containing path (skipped when ffmpeg is absent). Run with `./.venv/bin/python3 test_concat_file.py`.
 
 ## Version 1.4.2
 

@@ -1,0 +1,17 @@
+v1.4.3: fix concat failure for paths containing apostrophes
+
+Fixes conversions failing with "Impossible to open '...The Snoozing
+Dragon'" when the book folder or file names contain an apostrophe
+(e.g. "G. Z. Zzz - The Snoozing Dragon's Tail").
+
+- Escape single quotes in the ffmpeg concat list using the concat
+  demuxer's '\'' quoting rule so paths survive intact (PostRipM4B.py,
+  _create_concat_file)
+- Replace the CLI/GUI info log glyph ℹ with ⓘ; ℹ renders as a bare
+  lowercase "i" in many terminals
+- Add test_concat_file.py: unit tests verifying concat-list escaping
+  round-trips through ffmpeg's quoting rules (plain path, apostrophe
+  paths, multiple files) plus an end-to-end test running real ffmpeg
+  against an apostrophe-containing path (skipped when ffmpeg is absent)
+
+Bump version to 1.4.3; document the fix in README.md.

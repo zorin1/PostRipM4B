@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 
 # Optional imports for audio metadata
 try:
@@ -537,7 +537,7 @@ class ProgressTracker:
     def info(self, message: str):
         """Display informational message"""
         if self.config.verbosity.value >= Verbosity.NORMAL.value:
-            self._log(f"{self._format('ℹ', 'info')}  {message}")
+            self._log(f"{self._format('ⓘ', 'info')}  {message}")
 
     def success(self, message: str):
         """Display success message"""
@@ -1304,7 +1304,8 @@ class AudioBookConverter:
         with open(concat_file, 'w') as f:
             for m4b_file in self.intermediate_files:
                 abs_path = os.path.abspath(m4b_file)
-                f.write(f"file '{abs_path}'\n")
+                safe_path = abs_path.replace("'", "'\\''")
+                f.write(f"file '{safe_path}'\n")
 
         # Debug: show contents of concat file
         if self.config.verbosity == Verbosity.DEBUG:

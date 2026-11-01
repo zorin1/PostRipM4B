@@ -1,17 +1,25 @@
-v1.4.3: fix concat failure for paths containing apostrophes
+v1.4.4: paste a source folder into the GUI and keep browse dialogs in place
 
-Fixes conversions failing with "Impossible to open '...The Snoozing
-Dragon'" when the book folder or file names contain an apostrophe
-(e.g. "G. Z. Zzz - The Snoozing Dragon's Tail").
+The Input tab's "MP3 Files Location" field now works when you paste a
+folder into it, and Browse... no longer jumps back to the default music
+directory on every click.
 
-- Escape single quotes in the ffmpeg concat list using the concat
-  demuxer's '\'' quoting rule so paths survive intact (PostRipM4B.py,
-  _create_concat_file)
-- Replace the CLI/GUI info log glyph ℹ with ⓘ; ℹ renders as a bare
-  lowercase "i" in many terminals
-- Add test_concat_file.py: unit tests verifying concat-list escaping
-  round-trips through ffmpeg's quoting rules (plain path, apostrophe
-  paths, multiple files) plus an end-to-end test running real ffmpeg
-  against an apostrophe-containing path (skipped when ffmpeg is absent)
+- Paste replaces the field contents instead of splicing the new path
+  onto the existing text, and a pasted folder is picked up within about
+  half a second: metadata/chapters load, MP3 analysis starts and the
+  output directory becomes <folder>/m4b, without needing Enter or a
+  focus change (gui/main_window.py, eventFilter, on_source_debounce)
+- Normalize pasted paths: surrounding quotes, file:// URLs, stray
+  whitespace, multi-line clipboard content and trailing / or \ are all
+  handled; ~ and $HOME expand; a pasted file resolves to its parent
+  folder; text typed by hand is left untouched while typing
+  (_clean_path_text, _source_path_from_text, _tidy_source_field)
+- Read the source field through one normalizer (get_source_dir) in
+  validate_inputs, create_config_from_gui, scan_batch_directories,
+  load_and_analyze_chapters and analyze_mp3_duration, and report
+  "Source directory not found: ..." in the status bar for a bad path
+- Browse dialogs start where the field points (or the last folder
+  chosen) instead of the default music dir: source, chapter file, cover
+  image and temp directory
 
-Bump version to 1.4.3; document the fix in README.md.
+Bump version to 1.4.4; document the changes in README.md.

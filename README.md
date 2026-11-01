@@ -339,6 +339,15 @@ For issues, questions, or feature requests:
 
 *Happy listening! If you enjoy this tool, please consider starring the repository.*
 
+## Version 1.4.4
+
+This release makes the Input tab's **"MP3 Files Location"** field usable as a paste target, and makes the Browse buttons open where you actually are instead of always jumping back to the default music folder.
+
+- **Paste a folder into "MP3 Files Location"**: the field now reacts to a pasted path on its own — no Enter or click elsewhere needed. Within half a second of a paste the folder is validated, its `metadata.json`/`metadata.txt`/`chapters.txt` is loaded, MP3 analysis starts, and the Output Directory is set to `<folder>/m4b`. A paste also replaces the existing text instead of splicing the new path onto the end of it.
+- **Pasted paths are cleaned up automatically**: paths copied from a file manager are made usable — surrounding quotes (`"C:\Music\Book"`), `file://` URLs, stray whitespace, multi-line clipboard content (the first entry wins) and trailing `/` or `\` separators are all handled. `~` and `$HOME` are expanded, and pasting a file inside a book folder uses that folder. If the path doesn't exist, the status bar says so (`Source directory not found: …`) instead of failing later at conversion time. Text you type by hand is left untouched while you type it.
+- **Browse dialogs remember your location**: *Browse…* for the source opens at the folder currently in the field (or the last folder you chose) rather than the default music dir, and the chapter-file, cover-image and temp-directory pickers do the same — they previously received an invalid start folder and silently fell back to the default whenever the field held a pasted or non-existent path.
+- **The pasted location is what gets used everywhere**: scanning subdirectories, chapter auto-detection, MP3 duration analysis, validation and the conversion config all read the source field through one normalizer, so a quoted or trailing-separator path no longer counts as "no source directory selected".
+
 ## Version 1.4.3
 
 This release fixes conversions failing for books whose folder or file names contain an apostrophe (e.g. `G. Z. Zzz - The Snoozing Dragon's Tail`).

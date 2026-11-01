@@ -8,6 +8,7 @@ import argparse
 import subprocess
 import tempfile
 import shutil  # Add this import
+from urllib.parse import unquote, urlparse
 
 # Get the absolute path to the parent directory (where PostRipM4B.py is)
 current_file = Path(__file__).resolve()
@@ -51,8 +52,8 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QApplication, QGridLayout, QSplitter, QListWidget,
                              QListWidgetItem, QToolButton, QStyle, QStatusBar, QDialog,
                              QStyleOptionViewItem)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QIcon, QFont, QPixmap, QStandardItemModel
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
+from PyQt5.QtGui import QIcon, QFont, QPixmap, QStandardItemModel, QKeySequence
 from PyQt5.QtGui import QStandardItem
 
 # Import the new chapter editor - FIXED IMPORT
@@ -236,6 +237,14 @@ class ConverterMainWindow(QMainWindow):
         self._cli_explicit_fields = set()    # Fields explicitly set via CLI flags
         self._analysis_source = None        # Source dir being analyzed (stale-guard)
         self._batch_cancelled = False
+        self._last_source_dir = None        # Last directory used by the source browse dialog
+        self._source_paste_pending = False  # A paste into the source field is being handled
+        # Fires shortly after a folder is pasted into the source field so the
+        # location is picked up without pressing Enter or clicking elsewhere.
+        self._source_debounce_timer = QTimer(self)
+        self._source_debounce_timer.setSingleShot(True)
+        self._source_debounce_timer.setInterval(500)
+        self._source_debounce_timer.timeout.connect(self.on_source_debounce)
 
         self.init_ui()
 
@@ -306,10 +315,11 @@ class ConverterMainWindow(QMainWindow):
 
         self.source_label = QLabel("MP3 Files Location:")
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText("Select directory containing MP3 files")
+        self.source_edit.setPlaceholderText("Type or paste a directory containing MP3 files")
         self.source_browse_btn = QPushButton("Browse...")
         self.source_browse_btn.clicked.connect(self.browse_source)
         self.source_edit.editingFinished.connect(self.on_source_edit_finished)
+        self.source_edit.installEventFilter(self)
 
         source_layout.addWidget(self.source_label, 0, 0)
         source_layout.addWidget(self.source_edit, 0, 1)
@@ -372,17 +382,7 @@ class ConverterMainWindow(QMainWindow):
         perf_group.setLayout(perf_layout)
 
         # Auto-update output directory when source changes
-        def update_output_dir():
-            source_text = self.source_edit.text()
-            if source_text and source_text.strip():
-                source_path = Path(source_text.strip())
-                if source_path.exists():
-                    # Use source/m4b as output directory
-                    output_path = source_path / 'm4b'
-                    self.dest_edit.setText(str(output_path))
-
-        # Connect the signal
-        self.source_edit.textChanged.connect(update_output_dir)
+        self.source_edit.textChanged.connect(self.on_source_text_changed)
 
         # Add to layout
         layout.addWidget(source_group)
@@ -847,13 +847,14 @@ class ConverterMainWindow(QMainWindow):
     # Helper methods
     def browse_source(self):
         """Browse for source directory"""
-        default_dir = get_default_music_dir()
+        # Start where the field points (or where we last browsed), not the default
         directory = QFileDialog.getExistingDirectory(
             self, "Select Source Directory",
-            str(default_dir),
+            self.get_source_dir() or self._last_source_dir or str(get_default_music_dir()),
             QFileDialog.ShowDirsOnly
         )
         if directory:
+            self._last_source_dir = directory
             self.source_edit.setText(directory)
             self.metadata_source_dir = None
             # Auto-set output directory
@@ -889,7 +890,7 @@ class ConverterMainWindow(QMainWindow):
         file_filter = filters.get(format_index, "All files (*.*)")
 
         # Start from source directory if available
-        start_dir = self.source_edit.text() or str(get_default_music_dir())
+        start_dir = self.get_source_dir() or str(get_default_music_dir())
 
         filename, _ = QFileDialog.getOpenFileName(
             self, "Select Chapter File",
@@ -917,7 +918,7 @@ class ConverterMainWindow(QMainWindow):
         file_filter = "Image files (*.jpg *.jpeg *.png *.bmp);;All files (*.*)"
         filename, _ = QFileDialog.getOpenFileName(
             self, "Select Cover Image",
-            self.source_edit.text() or str(get_default_music_dir()),
+            self.get_source_dir() or str(get_default_music_dir()),
             file_filter
         )
         if filename:
@@ -938,7 +939,7 @@ class ConverterMainWindow(QMainWindow):
         """Browse for temporary directory"""
         directory = QFileDialog.getExistingDirectory(
             self, "Select Temporary Directory",
-            self.temp_edit.text() or self.source_edit.text(),
+            self.temp_edit.text() or self.get_source_dir() or "",
             QFileDialog.ShowDirsOnly
         )
         if directory:
@@ -952,13 +953,120 @@ class ConverterMainWindow(QMainWindow):
         """Handle chapter format selection change"""
         pass
 
+    def eventFilter(self, watched, event):
+        """Make pasting replace the whole source path instead of splicing into it."""
+        if (watched is getattr(self, 'source_edit', None)
+                and event.type() == QEvent.KeyPress
+                and event.matches(QKeySequence.Paste)
+                and not self.source_edit.hasSelectedText()
+                and self.source_edit.text()):
+            self.source_edit.selectAll()
+            self._source_paste_pending = True
+        return super().eventFilter(watched, event)
+
+    def _clean_path_text(self, text):
+        """Normalize a typed or pasted path: quotes, file:// URLs, extra whitespace.
+
+        This is what makes pasting a folder into the source field work: paths
+        copied from a file manager often arrive quoted, as a ``file://`` URL, or
+        with a trailing separator, and none of those are valid paths.
+        """
+        if not text:
+            return text
+
+        cleaned = text.strip()
+        # If several paths were pasted, only the first one is usable.
+        cleaned = cleaned.splitlines()[0].strip()
+
+        if cleaned.lower().startswith('file:'):
+            parsed = urlparse(cleaned)
+            if parsed.path:
+                cleaned = unquote(parsed.path)
+                if len(cleaned) > 3 and cleaned[0] == '/' and cleaned[2] == ':':
+                    cleaned = cleaned[1:]  # file:///C:/music -> C:/music
+            elif parsed.netloc:
+                cleaned = unquote(parsed.netloc)
+
+        cleaned = cleaned.strip('\'"').strip()
+        while len(cleaned) > 1 and cleaned[-1] in '\\/':
+            if len(cleaned) == 3 and cleaned[1] == ':':
+                break  # keep drive roots such as C:\
+            cleaned = cleaned[:-1]
+        return cleaned
+
+    def _source_path_from_text(self, text=None):
+        """Return the source as a Path (a file becomes its parent folder).
+
+        Does not check that the path exists; use :meth:`get_source_dir` for that.
+        """
+        text = self.source_edit.text() if text is None else text
+        cleaned = self._clean_path_text(text)
+        if not cleaned:
+            return None
+        try:
+            candidate = Path(os.path.expanduser(os.path.expandvars(cleaned)))
+        except (OSError, ValueError):
+            return None
+        if candidate.is_file():
+            return candidate.parent
+        return candidate
+
+    def get_source_dir(self):
+        """Existing source directory from the Input tab, else None."""
+        candidate = self._source_path_from_text()
+        if candidate is not None and candidate.is_dir():
+            return str(candidate.absolute())
+        return None
+
+    def on_source_text_changed(self, text):
+        """Tidy the field right after a paste, and keep the output dir in sync."""
+        if self._source_paste_pending:
+            self._source_paste_pending = False
+            self._tidy_source_field()
+        self.update_output_dir_from_source()
+        self._source_debounce_timer.start()
+
+    def update_output_dir_from_source(self):
+        """Mirror the source location in the output directory field."""
+        source = self._source_path_from_text()
+        if source is not None and source.is_dir():
+            self.dest_edit.setText(str(source / 'm4b'))
+
+    def _tidy_source_field(self):
+        """Replace the field with the cleaned-up (absolute) version of the path."""
+        cleaned = self._clean_path_text(self.source_edit.text())
+        candidate = self._source_path_from_text(cleaned)
+        if candidate is None:
+            return
+        # Leave relative paths, and paths from another platform (a Windows path
+        # pasted on Linux), as the user typed them.
+        text = str(candidate.absolute()) if candidate.is_absolute() else cleaned
+        if text != self.source_edit.text():
+            self.source_edit.setText(text)
+
+    def on_source_debounce(self):
+        """Pick up a pasted folder a moment after it was entered, without
+        touching the field itself (the user may still be typing)."""
+        self._source_paste_pending = False
+        self._load_source_metadata()
+
     def on_source_edit_finished(self):
-        source_dir = self.source_edit.text()
-        if source_dir:
-            normalized_source_dir = str(Path(source_dir).absolute())
-            if normalized_source_dir == self.metadata_source_dir:
-                return
-            self.auto_load_metadata_from_source(source_dir)
+        """Enter was pressed or the field lost focus: tidy and validate."""
+        self._source_debounce_timer.stop()
+        self._tidy_source_field()
+        self._load_source_metadata()
+
+    def _load_source_metadata(self):
+        """Load chapters/metadata for the source folder, if it exists."""
+        candidate = self._source_path_from_text()
+        if candidate is None:
+            return
+
+        if not candidate.is_dir():
+            self.status_bar.showMessage(f"Source directory not found: {self.source_edit.text()}")
+            return
+
+        self.auto_load_metadata_from_source(str(candidate.absolute()))
 
     def auto_load_metadata_from_source(self, source_dir):
         source_dir = str(Path(source_dir).absolute())
@@ -1058,8 +1166,8 @@ class ConverterMainWindow(QMainWindow):
         multi-CD book (e.g. `Book2/CD01`) are also shown, unchecked, so you can
         still convert a single disc on its own.
         """
-        source_dir = self.source_edit.text()
-        if not source_dir or not Path(source_dir).exists():
+        source_dir = self.get_source_dir()
+        if not source_dir:
             QMessageBox.warning(self, "Warning", "Please select a valid source directory first")
             return
 
@@ -1150,8 +1258,8 @@ class ConverterMainWindow(QMainWindow):
         # If no chapter file specified, try to auto-detect
         if not chapter_file or not Path(chapter_file).exists():
             # Try auto-detection
-            source_dir = self.source_edit.text()
-            if not source_dir or not Path(source_dir).exists():
+            source_dir = self.get_source_dir()
+            if not source_dir:
                 QMessageBox.warning(self, "Warning", "Please select a valid source directory first")
                 return
 
@@ -1209,8 +1317,8 @@ class ConverterMainWindow(QMainWindow):
 
     def analyze_mp3_duration(self):
         """Analyze MP3 files to get total duration"""
-        source_dir = self.source_edit.text()
-        if not source_dir or not Path(source_dir).exists():
+        source_dir = self.get_source_dir()
+        if not source_dir:
             QMessageBox.warning(self, "Warning", "Please select a valid source directory first")
             return
 
@@ -1920,7 +2028,7 @@ class ConverterMainWindow(QMainWindow):
             config.no_cover = self.no_cover_check.isChecked()
         else:
             # Single-book mode (unchanged behavior)
-            config.input_dir = self.source_edit.text()
+            config.input_dir = self.get_source_dir() or self.source_edit.text()
 
             # Metadata
             config.title = self.title_edit.text().strip() or None
@@ -2019,8 +2127,8 @@ class ConverterMainWindow(QMainWindow):
         """Validate user inputs before conversion"""
         # Batch mode validates the selected folders (not the Input-tab source).
         if self.using_batch_mode():
-            source_dir = self.source_edit.text()
-            if not source_dir or not Path(source_dir).exists():
+            source_dir = self.get_source_dir()
+            if not source_dir:
                 QMessageBox.warning(self, "Warning",
                                     "Please select a valid source directory and scan subdirectories first.")
                 return False
@@ -2045,8 +2153,9 @@ class ConverterMainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please select a source directory")
             return False
 
-        if not Path(source_dir).exists():
-            QMessageBox.warning(self, "Warning", f"Source directory does not exist:\n{source_dir}")
+        source_dir = self.get_source_dir()
+        if not source_dir:
+            QMessageBox.warning(self, "Warning", f"Source directory does not exist:\n{self.source_edit.text()}")
             return False
 
         # Check for MP3 files

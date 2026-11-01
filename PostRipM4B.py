@@ -43,7 +43,7 @@ import platform
 # Import the new chapter parser module
 import chapter_parser
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 
 # Optional imports for audio metadata
 try:
